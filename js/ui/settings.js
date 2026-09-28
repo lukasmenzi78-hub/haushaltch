@@ -143,8 +143,16 @@ function syncTab(rerender) {
   card.append(h('p', { class: 'small muted' },
     'Die App speichert alle Daten in einer einzigen JSON-Datei in deinem OneDrive. Gib den Ordner für Lea frei, dann arbeiten beide Geräte auf demselben Stand. Es gibt keinen fremden Server – die Daten gehen direkt von deinem Gerät zu Microsoft.'));
 
-  const clientI = h('input', { type: 'text', value: sync.getClientId(), placeholder: '00000000-0000-0000-0000-000000000000' });
-  const pathI = h('input', { type: 'text', value: sync.getFilePath(), placeholder: 'HaushaltCH/haushalt.json' });
+  // Beide Felder sofort beim Verlassen sichern. Sonst wäre die eingetippte Client-ID
+  // verloren, sobald jemand den Reiter wechselt, ohne vorher anzumelden.
+  const clientI = h('input', {
+    type: 'text', value: sync.getClientId(), placeholder: '00000000-0000-0000-0000-000000000000',
+    onChange: (e) => { sync.setClientId(e.target.value); },
+  });
+  const pathI = h('input', {
+    type: 'text', value: sync.getFilePath(), placeholder: 'HaushaltCH/haushalt.json',
+    onChange: (e) => { sync.setFilePath(e.target.value); },
+  });
   const redirect = sync.redirectUri();
 
   card.append(h('div', { class: 'form-grid' },
@@ -187,9 +195,12 @@ function syncTab(rerender) {
   const guide = h('section', { class: 'card' });
   guide.append(h('div', { class: 'card-head' }, h('h3', { class: 'grow' }, 'Einmalige Einrichtung (ca. 10 Minuten)')));
   guide.append(h('ol', { class: 'small' },
-    h('li', {}, 'Auf ', h('a', { href: 'https://entra.microsoft.com', target: '_blank', rel: 'noopener' }, 'entra.microsoft.com'), ' mit dem Microsoft-Konto anmelden.'),
+    h('li', {}, 'Auf ', h('a', { href: 'https://entra.microsoft.com', target: '_blank', rel: 'noopener' }, 'entra.microsoft.com'), ' mit dem Microsoft-Konto anmelden. ',
+      h('b', {}, 'Bei einem privaten Microsoft-Konto'), ' ist vorher einmalig ein kostenloses Azure-Konto nötig (',
+      h('a', { href: 'https://azure.microsoft.com/free', target: '_blank', rel: 'noopener' }, 'azure.microsoft.com/free'),
+      ') – ohne Verzeichnis lässt Microsoft keine Registrierung mehr zu.'),
     h('li', {}, '„Identität → Anwendungen → App-Registrierungen“ öffnen und ', h('b', {}, 'Neue Registrierung'), ' wählen.'),
-    h('li', {}, 'Name z. B. „HaushaltCH“. Bei den unterstützten Kontotypen ', h('b', {}, '„Konten in einem beliebigen Organisationsverzeichnis und persönliche Microsoft-Konten“'), ' auswählen.'),
+    h('li', {}, 'Name z. B. „HaushaltCH“. Bei den unterstützten Kontotypen ', h('b', {}, '„Alle Konten von Entra ID-Mandanten und persönliche Microsoft-Konten“'), ' auswählen.'),
     h('li', {}, 'Als Plattform ', h('b', {}, 'Einzelseitenanwendung (SPA)'), ' wählen und diese Umleitungs-URI eintragen: ', h('span', { class: 'kbd' }, redirect)),
     h('li', {}, 'Nach dem Anlegen die ', h('b', {}, 'Anwendungs-ID (Client)'), ' kopieren und oben einfügen.'),
     h('li', {}, 'Unter „API-Berechtigungen“ die delegierten Microsoft-Graph-Rechte ', h('span', { class: 'kbd' }, 'Files.ReadWrite'), ', ', h('span', { class: 'kbd' }, 'Files.ReadWrite.All'), ' und ', h('span', { class: 'kbd' }, 'User.Read'), ' hinzufügen.'),

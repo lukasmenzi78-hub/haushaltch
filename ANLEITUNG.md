@@ -53,9 +53,15 @@ Die App besteht nur aus statischen Dateien. Sie braucht eine Adresse im Internet
 Windows, iPhone und Android sie installieren können und damit die Microsoft-Anmeldung
 funktioniert (`file://` reicht dafür nicht).
 
+> **Für Lukas ist dieser Teil bereits erledigt.** Die App läuft unter
+> **https://lukasmenzi78-hub.github.io/haushaltch/** aus dem Repository
+> `lukasmenzi78-hub/haushaltch` (Branch `main`, Ordner `/ (root)`).
+> Um eine neue Version zu veröffentlichen: die geänderten Dateien im Repository
+> ersetzen – GitHub baut die Seite danach in ein bis zwei Minuten neu.
+
 ### Variante A – GitHub Pages (gratis, empfohlen)
 
-1. Auf [github.com](https://github.com) anmelden und ein **privates** Repository anlegen,
+1. Auf [github.com](https://github.com) anmelden und ein **öffentliches** Repository anlegen,
    z. B. `haushaltch`.
 2. Den gesamten Inhalt des Ordners `app/` (also `index.html`, `js/`, `css/`, `vendor/`,
    `icons/`, `manifest.webmanifest`, `sw.js`) ins Repository hochladen –
@@ -65,8 +71,14 @@ funktioniert (`file://` reicht dafür nicht).
 4. Nach ein bis zwei Minuten ist die App erreichbar unter
    `https://<dein-benutzername>.github.io/haushaltch/`.
 
-> Hinweis: Bei einem privaten Repository ist GitHub Pages im Gratis-Tarif öffentlich
-> erreichbar, aber nicht auffindbar. Wer das nicht möchte, nimmt Variante B.
+> **Wichtig zur Vertraulichkeit:** Im Gratis-Tarif lässt sich GitHub Pages nur aus einem
+> **öffentlichen** Repository betreiben – aus einem privaten Repository funktioniert Pages
+> gar nicht, und die Sichtbarkeit des Repositories macht die veröffentlichte Seite ohnehin
+> nie privat. Öffentlich ist hier also der **Programmcode** und die Adresse der App.
+>
+> Deine **Finanzdaten** sind davon nicht betroffen: Sie werden nie ins Repository
+> hochgeladen. Sie liegen ausschliesslich in deinem OneDrive und lokal im Browser.
+> Wer auch den Code nicht öffentlich haben möchte, nimmt Variante B.
 
 ### Variante B – Azure Static Web Apps (gratis, mit Zugriffsschutz)
 
@@ -89,8 +101,25 @@ es aber eine öffentliche Adresse.
 Damit die App direkt in dein OneDrive schreiben darf, braucht sie eine eigene
 Anwendungs-ID. Die ist gratis und in wenigen Schritten angelegt.
 
+> **Voraussetzung bei einem privaten Microsoft-Konto** (z. B. `@bluewin.ch`, `@outlook.com`):
+> Microsoft erlaubt App-Registrierungen nur noch innerhalb eines Verzeichnisses. Ein
+> privates Konto hat von sich aus keines – das Portal sperrt dann den Knopf *Neue
+> Registrierung* mit dem Hinweis, Anwendungen ausserhalb eines Verzeichnisses seien
+> veraltet.
+>
+> Abhilfe: einmalig ein **kostenloses Azure-Konto** unter
+> [azure.microsoft.com/free](https://azure.microsoft.com/free) anlegen – „zur persönlichen
+> Verwendung", Telefonnummer per SMS bestätigen, Identitätsprüfung per Karte (Microsoft
+> bucht einen Kleinstbetrag und erstattet ihn sofort; es entsteht kein Abo und keine
+> automatische Belastung). Dabei entsteht automatisch ein Verzeichnis
+> („Default Directory"), und danach funktionieren die folgenden Schritte.
+>
+> Ein Geschäftskonto (Microsoft 365 über die Firma) bringt das Verzeichnis bereits mit –
+> dort entfällt dieser Schritt, sofern die IT App-Registrierungen zulässt.
+
 1. [entra.microsoft.com](https://entra.microsoft.com) öffnen und mit deinem
-   Microsoft-Konto anmelden.
+   Microsoft-Konto anmelden. (Alternativ
+   [portal.azure.com](https://portal.azure.com) → *App-Registrierungen*.)
 2. **Identität → Anwendungen → App-Registrierungen → Neue Registrierung**.
 3. Ausfüllen:
    - **Name:** `HaushaltCH`
@@ -127,6 +156,8 @@ keine „wer zuletzt speichert, überschreibt alles“-Situation.
 ---
 
 ## Teil 3 – Installieren auf den Geräten
+
+Eure Adresse: **https://lukasmenzi78-hub.github.io/haushaltch/**
 
 | Gerät | Schritte |
 |---|---|

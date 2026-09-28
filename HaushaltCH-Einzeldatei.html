@@ -2439,7 +2439,8 @@ const ao="|";function so(e){const{skus:t,libraryName:r,libraryVersion:n,extensio
       const item = await ensureRemoteFile();
       const remote = store.meta.remote;
       if (!force && remote.eTag && item.eTag === remote.eTag) {
-        emit({ busy: false, status: "synchronisiert", message: "Aktuell", lastSync: now() });
+        await store.saveMeta({ lastSyncAt: now() });
+        emit({ busy: false, status: "synchronisiert", message: "Aktuell", lastSync: now(), error: null });
         return { unchanged: true };
       }
       const content = await graph(itemUrl(remote, "/content"));
@@ -10810,8 +10811,22 @@ PFF PFFD PFN PTY PDI RQI UTF UTG STK BST BSTZ
       { class: "small muted" },
       "Die App speichert alle Daten in einer einzigen JSON-Datei in deinem OneDrive. Gib den Ordner f\xFCr Lea frei, dann arbeiten beide Ger\xE4te auf demselben Stand. Es gibt keinen fremden Server \u2013 die Daten gehen direkt von deinem Ger\xE4t zu Microsoft."
     ));
-    const clientI = h("input", { type: "text", value: getClientId(), placeholder: "00000000-0000-0000-0000-000000000000" });
-    const pathI = h("input", { type: "text", value: getFilePath(), placeholder: "HaushaltCH/haushalt.json" });
+    const clientI = h("input", {
+      type: "text",
+      value: getClientId(),
+      placeholder: "00000000-0000-0000-0000-000000000000",
+      onChange: (e) => {
+        setClientId(e.target.value);
+      }
+    });
+    const pathI = h("input", {
+      type: "text",
+      value: getFilePath(),
+      placeholder: "HaushaltCH/haushalt.json",
+      onChange: (e) => {
+        setFilePath(e.target.value);
+      }
+    });
     const redirect = redirectUri();
     card.append(h(
       "div",
@@ -10888,9 +10903,19 @@ PFF PFFD PFN PTY PDI RQI UTF UTG STK BST BSTZ
     guide.append(h(
       "ol",
       { class: "small" },
-      h("li", {}, "Auf ", h("a", { href: "https://entra.microsoft.com", target: "_blank", rel: "noopener" }, "entra.microsoft.com"), " mit dem Microsoft-Konto anmelden."),
+      h(
+        "li",
+        {},
+        "Auf ",
+        h("a", { href: "https://entra.microsoft.com", target: "_blank", rel: "noopener" }, "entra.microsoft.com"),
+        " mit dem Microsoft-Konto anmelden. ",
+        h("b", {}, "Bei einem privaten Microsoft-Konto"),
+        " ist vorher einmalig ein kostenloses Azure-Konto n\xF6tig (",
+        h("a", { href: "https://azure.microsoft.com/free", target: "_blank", rel: "noopener" }, "azure.microsoft.com/free"),
+        ") \u2013 ohne Verzeichnis l\xE4sst Microsoft keine Registrierung mehr zu."
+      ),
       h("li", {}, "\u201EIdentit\xE4t \u2192 Anwendungen \u2192 App-Registrierungen\u201C \xF6ffnen und ", h("b", {}, "Neue Registrierung"), " w\xE4hlen."),
-      h("li", {}, "Name z. B. \u201EHaushaltCH\u201C. Bei den unterst\xFCtzten Kontotypen ", h("b", {}, "\u201EKonten in einem beliebigen Organisationsverzeichnis und pers\xF6nliche Microsoft-Konten\u201C"), " ausw\xE4hlen."),
+      h("li", {}, "Name z. B. \u201EHaushaltCH\u201C. Bei den unterst\xFCtzten Kontotypen ", h("b", {}, "\u201EAlle Konten von Entra ID-Mandanten und pers\xF6nliche Microsoft-Konten\u201C"), " ausw\xE4hlen."),
       h("li", {}, "Als Plattform ", h("b", {}, "Einzelseitenanwendung (SPA)"), " w\xE4hlen und diese Umleitungs-URI eintragen: ", h("span", { class: "kbd" }, redirect)),
       h("li", {}, "Nach dem Anlegen die ", h("b", {}, "Anwendungs-ID (Client)"), " kopieren und oben einf\xFCgen."),
       h("li", {}, "Unter \u201EAPI-Berechtigungen\u201C die delegierten Microsoft-Graph-Rechte ", h("span", { class: "kbd" }, "Files.ReadWrite"), ", ", h("span", { class: "kbd" }, "Files.ReadWrite.All"), " und ", h("span", { class: "kbd" }, "User.Read"), " hinzuf\xFCgen."),

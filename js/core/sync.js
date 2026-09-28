@@ -204,7 +204,10 @@ export async function pull({ force = false } = {}) {
     const item = await ensureRemoteFile();
     const remote = store.meta.remote;
     if (!force && remote.eTag && item.eTag === remote.eTag) {
-      emit({ busy: false, status: 'synchronisiert', message: 'Aktuell', lastSync: now() });
+      // Auch ohne Änderung war das ein erfolgreicher Abgleich – sonst stünde in den
+      // Einstellungen dauerhaft „zuletzt nie“.
+      await store.saveMeta({ lastSyncAt: now() });
+      emit({ busy: false, status: 'synchronisiert', message: 'Aktuell', lastSync: now(), error: null });
       return { unchanged: true };
     }
     const content = await graph(itemUrl(remote, '/content'));
