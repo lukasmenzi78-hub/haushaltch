@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="de-CH">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>HaushaltCH</title>
+  <meta name="description" content="Haushaltsbudget für die Schweiz – Konten, Flex-Budget, Sparziele und Nettovermögen, synchronisiert über OneDrive.">
+  <meta name="theme-color" content="#fcfcfb" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1a1a19" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="HaushaltCH">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon-192.png" sizes="192x192">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="./css/app.css">
+  <script>
+    // Farbschema so früh wie möglich anwenden, damit nichts aufblitzt
+    try {
+      var t = localStorage.getItem('swissfin.theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div id="app">
+    <div style="padding:40px;text-align:center;color:#898781;font:15px system-ui">HaushaltCH wird geladen …</div>
+  </div>
+  <div id="toasts"></div>
+
+  <!-- Bibliotheken lokal eingebunden, damit die App auch offline vollständig funktioniert -->
+  <script src="./vendor/xlsx.full.min.js"></script>
+  <script src="./vendor/msal-browser.min.js"></script>
+  <script type="module" src="./js/main.js"></script>
+  <noscript>
+    <p style="padding:24px;font:15px system-ui">Diese App benötigt JavaScript.</p>
+  </noscript>
+</body>
+</html>
