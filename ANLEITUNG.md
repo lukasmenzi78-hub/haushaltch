@@ -204,9 +204,14 @@ sobald wieder Verbindung besteht.
    schon vorhanden. Duplikate sind in der Vorschau markiert und werden nicht übernommen.
    Auch überlappende Monatsauszüge funktionieren: aus Jan–Mai und Apr–Aug landen die 74
    doppelten Zeilen nur einmal in der App.
-4. Nach dem Import **„Überträge zwischen Konten erkennen“** anklicken. Damit werden
-   Zahlungen von Konto zu Karte als Umbuchung markiert und nicht doppelt als Ausgabe
-   gezählt.
+4. Überträge zwischen den eigenen Konten verknüpft die App beim Import selbst, sobald
+   die IBAN im Buchungstext steht. Für den Rest gibt es **„Überträge zwischen Konten
+   erkennen“**: Der Knopf sucht Paare mit gleichem Betrag auf zwei Konten innerhalb von
+   fünf Tagen – aber nur, wenn mindestens eine Seite schon als Übertrag eingeordnet ist
+   (z. B. „Zahlung an Karte“) und die andere kein Einkauf ist. Ein Restaurantbesuch über
+   CHF 42.50 wird also nie mit einer zufällig gleich hohen Zahlung auf einem anderen
+   Konto verknüpft. „Import rückgängig“ löst die Verknüpfungen der entfernten
+   Buchungen ebenfalls.
 5. **Buchungen → „Nur nicht zugeordnet“** durchgehen. Zu häufigen Empfängern eine Regel
    erstellen (im Buchungsdialog auf *Regel erstellen*) – ab dann läuft es automatisch.
 6. **Budget:** Einkommen und Fixkosten eintragen oder **„Aus Ø 3 Monate“** nutzen.

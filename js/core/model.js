@@ -2,7 +2,7 @@
 import { uid, now, clone, todayISO } from './util.js';
 import { DEFAULT_CATEGORY_GROUPS, DEFAULT_CATEGORIES, DEFAULT_RULES, RETIRED_RULE_IDS } from './categories.js';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /** Alle Sammlungen sind Arrays von Records mit { id, updatedAt, deleted? }.
  *  Dadurch lässt sich ein Dokument zweier Geräte record-genau zusammenführen. */
@@ -268,8 +268,46 @@ export function migrate(doc) {
     }
   }
   if ((doc.schemaVersion || 0) < 4) syncSystemRules(doc, t);
+  if ((doc.schemaVersion || 0) < 5) {
+    // Einmalig: Verknüpfungen aufheben, die die frühere Betragssuche falsch gesetzt hat
+    const fixes = transferLinkFixes(doc);
+    if (fixes.size) doc.transactions = doc.transactions.map((x) => (fixes.has(x.id) ? { ...fixes.get(x.id), updatedAt: t } : x));
+  }
   doc.schemaVersion = SCHEMA_VERSION;
   return doc;
+}
+
+/** Kategorien der Gruppe „Überträge“ (Umbuchung, Kreditkarten-Zahlung, Bargeldbezug …). */
+export function transferCategoryIds(doc) {
+  return new Set((doc.categories || []).filter((c) => c.groupId === 'g_transfer' && !c.deleted).map((c) => c.id));
+}
+
+/**
+ * Findet Übertragsverknüpfungen, die nicht stimmen können, und gibt die korrigierten
+ * Buchungen zurück (Map id → Buchung, ohne neuen Zeitstempel). Nicht stimmen kann eine
+ * Verknüpfung,
+ *  - deren Gegenbuchung fehlt, gelöscht ist oder nicht zurückverweist (z. B. nach
+ *    „Import rückgängig“), oder
+ *  - bei der eine Seite ein Einkauf mit der Kreditkarte ist: eine Belastung auf einem
+ *    Kartenkonto, die nicht als Übertrag eingeordnet ist. Ein Restaurantbesuch ist nie
+ *    die Gegenbuchung einer Überweisung, auch wenn der Betrag zufällig passt.
+ * Die gelöste Buchung zählt danach wieder normal – ausser ihre Kategorie ist selbst ein
+ * Übertrag.
+ */
+export function transferLinkFixes(doc) {
+  const live = new Map((doc.transactions || []).filter((x) => !x.deleted).map((x) => [x.id, x]));
+  const cards = new Set((doc.accounts || []).filter((a) => a.type === 'kreditkarte').map((a) => a.id));
+  const transferCats = transferCategoryIds(doc);
+  const isPurchase = (x) => cards.has(x.accountId) && x.amount < 0 && !transferCats.has(x.categoryId);
+  const fixes = new Map();
+  const unlink = (x) => fixes.set(x.id, { ...x, transferPairId: null, isTransfer: transferCats.has(x.categoryId) });
+  for (const x of live.values()) {
+    if (!x.transferPairId || fixes.has(x.id)) continue;
+    const m = live.get(x.transferPairId);
+    if (!m || m.transferPairId !== x.id || m.accountId === x.accountId) { unlink(x); continue; }
+    if (isPurchase(x) || isPurchase(m)) { unlink(x); unlink(m); }
+  }
+  return fixes;
 }
 
 /**

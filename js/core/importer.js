@@ -1,7 +1,7 @@
 // importer.js — Dateien einlesen, Import planen, Buchungen übernehmen
 import { store } from './store.js';
 import { parseSheet, dedupKey, dedupKeyLoose, FORMATS, FORMAT_LABELS } from './parsers.js';
-import { newTransaction, newAccount } from './model.js';
+import { newTransaction, newAccount, transferLinkFixes, transferCategoryIds } from './model.js';
 import { parseCSV, normText, uid, now, round2, todayISO, groupBy, cmpStr, sortBy } from './util.js';
 import { evaluate } from './rules.js';
 import { toBase } from './fx.js';
@@ -346,6 +346,10 @@ export function undoImport(importId) {
   const ids = store.idx.transactions.filter((t) => t.importId === importId).map((t) => t.id);
   store.removeMany('transactions', ids, 'Import rückgängig');
   store.remove('imports', importId, 'Import rückgängig');
+  // Gegenbuchungen auf anderen Konten verweisen sonst ins Leere und blieben als
+  // Übertrag aus dem Budget ausgeschlossen
+  const fixes = transferLinkFixes(store.doc);
+  if (fixes.size) store.upsertMany('transactions', [...fixes.values()], 'Verknüpfungen gelöst');
   return ids.length;
 }
 
@@ -446,18 +450,35 @@ export function markAsCardPayments(txnIds) {
 /* ---------------- Gegenbuchungen erkennen ---------------- */
 
 /** Findet Paare wie "Zahlung an Karte -1769.50" ↔ "Gutschrift Kreditkarte +1769.50". */
+/**
+ * Sucht Paare aus Belastung und Gutschrift mit gleichem Betrag auf zwei verschiedenen
+ * Konten. Gleicher Betrag allein reicht nicht: Mindestens eine Seite muss schon als
+ * Übertrag gelten (Regel oder Kategorie der Gruppe „Überträge“), und die andere Seite
+ * darf kein Einkauf sein. Sonst wird z. B. ein Restaurantbesuch auf der einen Karte mit
+ * der Kartenzahlung auf der anderen verknüpft, nur weil die Beträge zufällig gleich sind.
+ * Überträge mit IBAN im Text verknüpft schon der Import selbst (reconcileOwnTransfers).
+ */
 export function detectTransfers(days = 5) {
-  const txns = store.idx.transactions.filter((t) => !t.transferPairId);
+  const transferCats = transferCategoryIds(store.doc);
+  const isCard = (t) => store.account(t.accountId)?.type === 'kreditkarte';
+  const transferLike = (t) => t.isTransfer || transferCats.has(t.categoryId);
+  const eligible = (t) => transferLike(t) || (t.categoryId === 'c_unkategorisiert' && !isCard(t));
+  const txns = store.idx.transactions.filter((t) => !t.transferPairId && eligible(t));
   const byAmount = groupBy(txns, (t) => Math.abs(round2(toBase(t.amount, t.currency, t.date))).toFixed(2));
   const pairs = [];
+  const used = new Set();
   for (const [, list] of byAmount) {
     const debits = list.filter((t) => t.amount < 0);
     const credits = list.filter((t) => t.amount > 0);
     for (const d of debits) {
-      const match = credits.find((c) => c.accountId !== d.accountId
-        && Math.abs(new Date(c.date) - new Date(d.date)) <= days * 86400000
-        && !pairs.some((p) => p.a.id === c.id || p.b.id === c.id));
-      if (match) pairs.push({ a: d, b: match });
+      let match = null, best = Infinity;
+      for (const c of credits) {
+        if (used.has(c.id) || c.accountId === d.accountId) continue;
+        if (!transferLike(d) && !transferLike(c)) continue;
+        const gap = Math.abs(new Date(c.date) - new Date(d.date));
+        if (gap <= days * 86400000 && gap < best) { match = c; best = gap; }
+      }
+      if (match) { used.add(match.id); pairs.push({ a: d, b: match }); }
     }
   }
   return pairs;

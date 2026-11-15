@@ -111,6 +111,42 @@ const s2 = await summary();
 check(s2.total === s1.total, `erneuter Import derselben Dateien fügt keine Buchung hinzu (${s2.total})`);
 check(s2.dividends === s1.dividends, 'erneuter Import fügt keine Dividende hinzu');
 check(JSON.stringify(s2.acc.map((a) => [a.n, a.transfers, a.linked, a.holdings])) === JSON.stringify(s1.acc.map((a) => [a.n, a.transfers, a.linked, a.holdings])), 'Konten, Überträge und Positionen unverändert');
+// Knopf „Überträge zwischen Konten erkennen“ – darf keinen Einkauf zum Übertrag machen
+const linkCheck = () => page.evaluate(async () => {
+  const { store } = await import('./js/core/store.js');
+  const tx = store.idx.transactions;
+  const byId = new Map(tx.map((x) => [x.id, x]));
+  const cards = new Set(store.idx.accounts.filter((a) => a.type === 'kreditkarte').map((a) => a.id));
+  const transferCats = new Set(store.idx.categories.filter((c) => c.groupId === 'g_transfer').map((c) => c.id));
+  const linked = tx.filter((x) => x.transferPairId);
+  return {
+    linked: linked.length,
+    purchases: linked.filter((x) => cards.has(x.accountId) && x.amount < 0 && !transferCats.has(x.categoryId)).length,
+    dangling: linked.filter((x) => byId.get(x.transferPairId)?.transferPairId !== x.id).length,
+    excludedPurchases: tx.filter((x) => x.isTransfer && !x.transferPairId && cards.has(x.accountId) && x.amount < 0 && !transferCats.has(x.categoryId)).length,
+  };
+});
+const before = await linkCheck();
+await page.getByRole('button', { name: /Überträge zwischen Konten erkennen/ }).click();
+await page.waitForTimeout(800);
+const after = await linkCheck();
+console.log(`   Knopf „Überträge erkennen“: ${after.linked - before.linked} Buchungen zusätzlich verknüpft`);
+check(after.purchases === 0, `kein Karteneinkauf als Übertrag verknüpft (${after.purchases})`);
+check(after.dangling === 0, 'jede Verknüpfung zeigt auf eine bestehende Gegenbuchung');
+
+// „Import rückgängig“ beim Konto mit den meisten Verknüpfungen: keine losen Enden
+const undone = await page.evaluate(async () => {
+  const { store } = await import('./js/core/store.js');
+  const { undoImport } = await import('./js/core/importer.js');
+  const score = (imp) => store.idx.transactions.filter((x) => x.importId === imp.id && x.transferPairId).length;
+  const imp = store.idx.imports.filter((i) => i.format !== 'ibkr').sort((a, b) => score(b) - score(a))[0];
+  return { links: score(imp), n: undoImport(imp.id) };
+});
+const afterUndo = await linkCheck();
+console.log(`   Import mit ${undone.links} verknüpften Buchungen rückgängig gemacht`);
+check(afterUndo.dangling === 0, 'nach „Rückgängig“ verweist keine Buchung mehr ins Leere');
+check(afterUndo.excludedPurchases === 0, 'kein Karteneinkauf bleibt als Übertrag aus dem Budget ausgeschlossen');
+
 check(errors.length === 0, `keine Fehler in der Konsole${errors.length ? ': ' + errors.slice(0, 3).join(' / ') : ''}`);
 
 await browser.close(); server.close();
