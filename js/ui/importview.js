@@ -11,6 +11,7 @@ import { modal, toast, confirmDialog, emptyState, statTile, memberSelect, accoun
 import { migrate } from '../core/model.js';
 import { detectIbkr, parseIbkr } from '../core/ibkr.js';
 import { mergeHoldings, writeSnapshot } from '../core/investments.js';
+import { toBase } from '../core/fx.js';
 import { newAccount } from '../core/model.js';
 
 export function renderImport({ navigate }) {
@@ -126,11 +127,20 @@ async function importPositionsFile(data) {
 /** Assistent für IBKR-Auszüge. */
 function openIbkrWizard(parsed, fileName) {
   const depots = store.idx.accounts.filter((a) => a.type === 'depot' && !a.archived);
+  // Das Depot wird an der IBKR-Kontonummer wiedererkannt. Ein Auszug eines anderen
+  // IBKR-Kontos darf nie stillschweigend in ein bestehendes Depot laufen – mit „fehlende
+  // Positionen als verkauft behandeln“ würde er dessen Bestand ausbuchen.
+  const ibkrId = parsed.meta?.accountId || '';
+  const known = ibkrId ? depots.find((a) => a.importSignature === ibkrId) : null;
+  const legacy = !known && depots.length === 1 && (!depots[0].importSignature || depots[0].importSignature === 'IBKR')
+    && !ibkrId ? depots[0] : null;
+  const baseCurrency = parsed.meta?.baseCurrency || parsed.holdings[0]?.currency || 'USD';
   const state = {
-    accountId: depots[0]?.id || null,
-    newAccountName: 'Interactive Brokers',
+    accountId: (known || legacy)?.id || null,
+    newAccountName: parsed.meta?.alias ? `IBKR ${parsed.meta.alias}` : 'Interactive Brokers',
     replaceMissing: true,
     withDividends: true,
+    withCash: parsed.meta?.cash !== null && parsed.meta?.cash !== undefined,
   };
   const body = h('div', {});
 
@@ -145,18 +155,30 @@ function openIbkrWizard(parsed, fileName) {
           if (!accountId) {
             const acc = newAccount({
               name: state.newAccountName, type: 'depot', institution: 'Interactive Brokers',
-              currency: parsed.holdings[0]?.currency || 'USD', balanceMode: 'holdings',
-              importSignature: parsed.meta?.accountId || 'IBKR',
+              currency: baseCurrency, balanceMode: 'holdings',
+              importSignature: ibkrId || 'IBKR',
+              ...(state.withCash ? { cashBalance: parsed.meta.cash } : {}),
             });
             store.upsert('accounts', acc, 'Depot angelegt');
             accountId = acc.id;
           } else {
-            store.patch('accounts', accountId, { balanceMode: 'holdings' }, 'Depot bewertet sich aus Positionen');
+            const target = store.idx.accounts.find((a) => a.id === accountId);
+            store.patch('accounts', accountId, {
+              balanceMode: 'holdings',
+              // Barbestand nur übernehmen, wenn er in der Währung des Depots vorliegt
+              ...(state.withCash && target?.currency === baseCurrency ? { cashBalance: parsed.meta.cash } : {}),
+              ...(ibkrId && (!target?.importSignature || target.importSignature === 'IBKR') ? { importSignature: ibkrId } : {}),
+            }, 'Depot bewertet sich aus Positionen');
           }
           const res = mergeHoldings(parsed.holdings, { accountId, replaceMissing: state.replaceMissing });
           if (state.withDividends && parsed.dividends.length) {
-            const existing = new Set(store.idx.dividends.map((d) => `${d.date}|${d.symbol}|${d.amount}`));
-            const fresh = parsed.dividends.filter((d) => !existing.has(`${d.date}|${d.symbol}|${d.amount}`));
+            // Dieselbe Ausschüttung kann in zwei Depots am selben Tag mit gleichem Betrag
+            // vorkommen – deshalb gehört das Depot zum Schlüssel.
+            const keyOf = (d) => `${d.accountId || ''}|${d.date}|${d.symbol}|${d.amount}|${d.withholding || 0}`;
+            const existing = new Set(store.idx.dividends.map(keyOf));
+            const legacyKeys = new Set(store.idx.dividends.filter((d) => !d.accountId).map((d) => `${d.date}|${d.symbol}|${d.amount}`));
+            const fresh = parsed.dividends.map((d) => ({ ...d, accountId }))
+              .filter((d) => !existing.has(keyOf(d)) && !legacyKeys.has(`${d.date}|${d.symbol}|${d.amount}`));
             if (fresh.length) store.upsertMany('dividends', fresh, 'Dividenden importiert');
           }
           writeSnapshot();
@@ -180,13 +202,18 @@ function openIbkrWizard(parsed, fileName) {
       parsed.meta?.baseCurrency ? h('span', { class: 'badge' }, `Basis ${parsed.meta.baseCurrency}`) : null,
       parsed.meta?.period ? h('span', { class: 'badge' }, parsed.meta.period) : null));
 
-    const value = parsed.holdings.reduce((a, x) => a + x.quantity * x.lastPrice, 0);
-    const cost = parsed.holdings.reduce((a, x) => a + x.quantity * x.avgCost, 0);
+    // Positionen in mehreren Währungen: zum heutigen Kurs in die Basiswährung umrechnen
+    const value = parsed.holdings.reduce((a, x) => a + toBase(x.quantity * x.lastPrice, x.currency), 0);
+    const cost = parsed.holdings.reduce((a, x) => a + toBase(x.quantity * x.avgCost, x.currency), 0);
     body.append(h('div', { class: 'stat-row', style: { marginBottom: '14px' } },
       statTile({ label: 'Positionen', value: String(parsed.holdings.length), hero: true }),
-      statTile({ label: 'Wert im Auszug', value: fmtMoney(value, parsed.holdings[0]?.currency || 'USD', { noDecimals: true }) }),
-      statTile({ label: 'Einstand', value: fmtMoney(cost, parsed.holdings[0]?.currency || 'USD', { noDecimals: true }) }),
+      statTile({ label: 'Wert im Auszug', value: fmtMoney(value, store.baseCurrency, { noDecimals: true }) }),
+      statTile({ label: 'Einstand (heutiger Kurs)', value: fmtMoney(cost, store.baseCurrency, { noDecimals: true }) }),
       statTile({ label: 'Dividenden', value: String(parsed.dividends.length) })));
+    if (!parsed.holdings.length) {
+      body.append(h('p', { class: 'small', style: { color: 'var(--critical)' } },
+        'In dieser Datei wurden keine offenen Positionen gefunden. Bitte den Kontoauszug (Activity Statement bzw. „Umsatzübersicht“) als CSV exportieren.'));
+    }
 
     const accSel = h('select', { onChange: (e) => { state.accountId = e.target.value || null; refresh(); } },
       h('option', { value: '', selected: !state.accountId }, '➕ Neues Depot anlegen'),
@@ -205,6 +232,14 @@ function openIbkrWizard(parsed, fileName) {
         onChange: (e) => { state.replaceMissing = e.target.checked; },
       }),
       h('span', {}, 'Positionen, die im Auszug fehlen, als verkauft behandeln')));
+    if (parsed.meta?.cash !== null && parsed.meta?.cash !== undefined) {
+      body.append(h('label', { class: 'row tight' },
+        h('input', {
+          type: 'checkbox', checked: state.withCash,
+          onChange: (e) => { state.withCash = e.target.checked; },
+        }),
+        h('span', {}, `Barbestand übernehmen (${fmtMoney(parsed.meta.cash, baseCurrency)})`)));
+    }
     if (parsed.dividends.length) {
       body.append(h('label', { class: 'row tight' },
         h('input', {
@@ -396,6 +431,10 @@ function openWizard(analysis, navigate) {
       parsed.range ? h('span', { class: 'badge' }, `${fmtDate(parsed.range.from)} – ${fmtDate(parsed.range.to)}`) : null,
       h('span', { class: 'badge' }, `${parsed.transactions.length} Zeilen`),
       hint.currency ? h('span', { class: 'badge' }, hint.currency) : null));
+    // Hinweise des Parsers (z. B. Saldokontrolle, in Excel neu gespeicherte Datei)
+    for (const w of parsed.warnings || []) {
+      body.append(h('p', { class: 'small', style: { color: 'var(--warning, var(--critical))', margin: '0 0 8px' } }, `⚠ ${w}`));
+    }
 
     // Kontozuordnung
     const accBox = h('div', { class: 'form-grid' });
@@ -531,7 +570,8 @@ function openWizard(analysis, navigate) {
       accountId: state.accountId,
       setBalance: state.setBalance && closing ? closing : null,
     });
-    toast(`${res.imported} Buchungen importiert`, 'success');
+    const own = res.ownTransfers?.marked || 0;
+    toast(`${res.imported} Buchungen importiert` + (own ? ` · ${own} als Übertrag zwischen eigenen Konten erkannt` : ''), 'success');
     dlg.close();
   }
 

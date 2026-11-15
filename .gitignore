@@ -1,0 +1,7 @@
+# Abhängigkeiten der Prüfskripte
+node_modules/
+
+# Echte Kontoauszüge gehören nie ins Repository – es ist öffentlich
+samples/
+auszuege/
+*.private.*

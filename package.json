@@ -1,0 +1,12 @@
+{
+  "name": "haushaltch",
+  "private": true,
+  "type": "module",
+  "description": "HaushaltCH – Haushaltsbudget für die Schweiz. Die App selbst braucht keinen Build; dieses Paket dient nur den Prüfskripten in dev/.",
+  "scripts": {
+    "test": "node dev/test-import.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.65.1"
+  }
+}

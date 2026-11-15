@@ -1,5 +1,6 @@
 // ibkr.js — Auszüge von Interactive Brokers einlesen
-// Unterstützt den abschnittsbasierten Activity Statement (CSV) und flache Flex-Query-Exporte.
+// Unterstützt den abschnittsbasierten Activity Statement (CSV, englisch und deutsch –
+// dort heisst er „Umsatzübersicht“) und flache Flex-Query-Exporte.
 import { newHolding, newDividend } from './model.js';
 import { toISODate, parseNumber, normText, round2 } from './util.js';
 
@@ -9,11 +10,41 @@ const qty = (n) => Number(Number(n).toFixed(8));
 const norm = (v) => String(v ?? '').trim();
 const lower = (v) => norm(v).toLowerCase();
 
+/* Abschnittsnamen des Auszugs: englisch und deutsch. */
+const SECTION = {
+  statement: ['Statement'],
+  account: ['Account Information', 'Kontoinformation'],
+  positions: ['Open Positions', 'Offene Positionen'],
+  dividends: ['Dividends', 'Dividenden'],
+  withholding: ['Withholding Tax', 'Quellensteuer'],
+  deposits: ['Deposits & Withdrawals', 'Einzahlungen & Auszahlungen'],
+  instruments: ['Financial Instrument Information', 'Informationen zum Finanzinstrument'],
+  cash: ['Cash Report', 'Cash-Bericht'],
+};
+const section = (secs, key) => { for (const n of SECTION[key]) if (secs.has(n)) return secs.get(n); return null; };
+
+/**
+ * Datum aus einem IBKR-Auszug. IBKR selbst schreibt ISO („2026-05-14“). Wurde die Datei
+ * in einem Excel mit US-Einstellung geöffnet und gespeichert, steht dort „5/14/2026“ –
+ * Monat zuerst. Die allgemeine Datumsroutine liest Schrägstriche als Tag/Monat und
+ * würde daraus den 5. des 14. Monats machen.
+ */
+export function ibkrDate(value) {
+  const s = norm(value);
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return toISODate(value);
+  let month = Number(m[1]), day = Number(m[2]);
+  if (month > 12 && day <= 12) [month, day] = [day, month];
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return `${m[3]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 /** Erkennt IBKR-Dateien an den typischen Abschnitten bzw. Spalten. */
 export function detectIbkr(rows) {
   if (!rows || !rows.length) return false;
   const firstCells = rows.slice(0, 80).map((r) => lower(r?.[0]));
-  if (firstCells.some((c) => c === 'open positions' || c === 'statement' || c === 'net asset value')) return true;
+  if (firstCells.some((c) => c === 'open positions' || c === 'offene positionen' || c === 'statement'
+    || c === 'net asset value' || c === 'nettovermögenswert')) return true;
   for (const r of rows.slice(0, 12)) {
     const cells = (r || []).map(lower);
     const hasSymbol = cells.includes('symbol');
@@ -89,7 +120,8 @@ PFF PFFD PFN PTY PDI RQI UTF UTG STK BST BSTZ
 `.trim().split(/\s+/));
 
 const ASSET_MAP = {
-  stocks: 'aktie', stock: 'aktie', stk: 'aktie', equity: 'aktie',
+  stocks: 'aktie', stock: 'aktie', stk: 'aktie', equity: 'aktie', aktien: 'aktie',
+  anleihen: 'anleihe', devisen: 'bargeld', investmentfonds: 'fonds', rohstoffe: 'rohstoff',
   etfs: 'etf', etf: 'etf', funds: 'fonds', fund: 'fonds',
   bonds: 'anleihe', bond: 'anleihe', bnd: 'anleihe',
   cash: 'bargeld', forex: 'bargeld',
@@ -98,9 +130,14 @@ const ASSET_MAP = {
 };
 
 /** ETFs und Aktien lassen sich im Auszug nicht sicher unterscheiden – der Name hilft. */
-export function classify(assetCategory, name = '', symbol = '') {
+export function classify(assetCategory, name = '', symbol = '', instrumentType = '') {
   const base = ASSET_MAP[lower(assetCategory).replace(/[^a-z]/g, '')] || null;
   if (base && base !== 'aktie') return base;
+  // Der Auszug sagt es im Abschnitt „Informationen zum Finanzinstrument“ selbst
+  const type = lower(instrumentType);
+  if (type === 'etf' || type === 'etn' || type === 'etc') return 'etf';
+  if (type.includes('fund')) return 'fonds';
+  if (type === 'common' || type === 'adr' || type === 'reit' || type === 'preferred') return 'aktie';
   const text = normText(`${name} ${symbol}`);
   if (/\betf\b|index fund|ishares|vanguard|spdr|invesco|xtrackers|ucits|trust|portfolio/.test(text)) return 'etf';
   if (ETF_TICKERS.has(norm(symbol).toUpperCase())) return 'etf';
@@ -112,41 +149,67 @@ function parseSectionStatement(rows) {
   const holdings = [];
   const dividends = [];
   const deposits = [];
-  const meta = { baseCurrency: null, accountId: null, accountName: null, period: null };
+  const meta = { baseCurrency: null, accountId: null, accountName: null, alias: null, period: null, cash: null, cashByCurrency: {} };
 
-  const info = secs.get('Statement') || secs.get('Account Information');
-  if (info) {
+  for (const info of [section(secs, 'statement'), section(secs, 'account')]) {
+    if (!info) continue;
     for (const r of info.rows) {
       const k = lower(r[0]);
-      if (k.includes('base currency')) meta.baseCurrency = norm(r[1]).toUpperCase();
-      if (k === 'account' || k.includes('account id')) meta.accountId = norm(r[1]);
+      if (k.includes('base currency') || k === 'basiswährung') meta.baseCurrency = norm(r[1]).toUpperCase();
+      if (k === 'account' || k.includes('account id') || k === 'konto') meta.accountId = norm(r[1]);
       if (k === 'name') meta.accountName = norm(r[1]);
-      if (k === 'period') meta.period = norm(r[1]);
-    }
-  }
-  const acct = secs.get('Account Information');
-  if (acct) {
-    for (const r of acct.rows) {
-      const k = lower(r[0]);
-      if (k.includes('base currency')) meta.baseCurrency = norm(r[1]).toUpperCase();
-      if (k === 'account') meta.accountId = norm(r[1]);
+      if (k === 'account alias' || k === 'konto-alias') meta.alias = norm(r[1]);
+      if (k === 'period' || k === 'zeitraum') meta.period = norm(r[1]);
     }
   }
 
-  const pos = secs.get('Open Positions');
+  // Bezeichnung, ISIN und Art je Symbol
+  const instruments = new Map();
+  const ins = section(secs, 'instruments');
+  if (ins) {
+    const h = ins.header;
+    const ix = {
+      sym: col(h, 'Symbol'), desc: col(h, 'Description', 'Beschreibung'),
+      isin: col(h, 'Security ID', 'Wertpapier-ID'), exch: col(h, 'Listing Exch', 'Börse'), type: col(h, 'Type', 'Typ'),
+    };
+    for (const r of ins.rows) {
+      const symbol = norm(r[ix.sym]).toUpperCase();
+      if (!symbol) continue;
+      instruments.set(symbol, {
+        name: ix.desc >= 0 ? norm(r[ix.desc]) : '', isin: ix.isin >= 0 ? norm(r[ix.isin]) : '',
+        exchange: ix.exch >= 0 ? norm(r[ix.exch]) : '', type: ix.type >= 0 ? norm(r[ix.type]) : '',
+      });
+    }
+  }
+
+  // Barbestand: „Ending Cash“ je Währung und in Basiswährung
+  const cash = section(secs, 'cash');
+  if (cash) {
+    for (const r of cash.rows) {
+      const label = lower(r[0]);
+      if (label !== 'ending cash' && label !== 'endbarsaldo') continue;
+      const cur = norm(r[1]);
+      const amount = parseNumber(r[2]);
+      if (amount === null) continue;
+      if (/^[A-Z]{3}$/.test(cur)) meta.cashByCurrency[cur] = round2(amount);
+      else meta.cash = round2(amount);          // „Base Currency Summary“ / „Basiswährungsübersicht“
+    }
+  }
+
+  const pos = section(secs, 'positions');
   if (pos) {
     const h = pos.header;
     const ix = {
       disc: col(h, 'DataDiscriminator'),
-      asset: col(h, 'Asset Category'),
-      cur: col(h, 'Currency'),
+      asset: col(h, 'Asset Category', 'Vermögenswertkategorie'),
+      cur: col(h, 'Currency', 'Währung'),
       sym: col(h, 'Symbol'),
-      qty: col(h, 'Quantity'),
-      costPrice: col(h, 'Cost Price', 'CostBasisPrice'),
-      costBasis: col(h, 'Cost Basis', 'CostBasisMoney'),
-      close: col(h, 'Close Price', 'MarkPrice'),
-      value: col(h, 'Value', 'PositionValue'),
-      desc: col(h, 'Description'),
+      qty: col(h, 'Quantity', 'Menge'),
+      costPrice: col(h, 'Cost Price', 'CostBasisPrice', 'Einstands Kurs', 'Einstandskurs'),
+      costBasis: col(h, 'Cost Basis', 'CostBasisMoney', 'Kostenbasis'),
+      close: col(h, 'Close Price', 'MarkPrice', 'Schlusskurs'),
+      value: col(h, 'Value', 'PositionValue', 'Wert'),
+      desc: col(h, 'Description', 'Beschreibung'),
     };
     for (const r of pos.rows) {
       if (ix.disc >= 0 && lower(r[ix.disc]) && lower(r[ix.disc]) !== 'summary') continue;
@@ -159,29 +222,35 @@ function parseSectionStatement(rows) {
       const basis = ix.costBasis >= 0 ? parseNumber(r[ix.costBasis]) : null;
       if ((avgCost === null || avgCost === 0) && basis) avgCost = basis / quantity;
       const price = ix.close >= 0 ? parseNumber(r[ix.close]) : null;
-      const name = ix.desc >= 0 ? norm(r[ix.desc]) : '';
+      const info = instruments.get(symbol) || {};
+      const name = (ix.desc >= 0 ? norm(r[ix.desc]) : '') || info.name || '';
       holdings.push(newHolding({
         symbol, name,
-        assetClass: classify(ix.asset >= 0 ? r[ix.asset] : '', name, symbol),
+        assetClass: classify(ix.asset >= 0 ? r[ix.asset] : '', name, symbol, info.type),
         currency,
         quantity: qty(quantity),
         avgCost: avgCost ? Number(avgCost.toFixed(6)) : 0,
         lastPrice: price ? round2(price) : 0,
         lastPriceAt: price ? Date.now() : null,
         priceSource: price ? 'IBKR-Auszug' : 'manuell',
+        isin: info.isin || '', exchange: info.exchange || '',
       }));
     }
   }
 
-  const div = secs.get('Dividends');
+  const fourCols = (h) => ({
+    cur: col(h, 'Currency', 'Währung'), date: col(h, 'Date', 'Datum'),
+    desc: col(h, 'Description', 'Beschreibung'), amount: col(h, 'Amount', 'Betrag'),
+  });
+
+  const div = section(secs, 'dividends');
   if (div) {
-    const h = div.header;
-    const ix = { cur: col(h, 'Currency'), date: col(h, 'Date'), desc: col(h, 'Description'), amount: col(h, 'Amount') };
+    const ix = fourCols(div.header);
     for (const r of div.rows) {
       const currency = norm(r[ix.cur]).toUpperCase();
-      const date = toISODate(r[ix.date]);
+      const date = ibkrDate(r[ix.date]);
       const amount = parseNumber(r[ix.amount]);
-      if (!date || !amount || currency.startsWith('TOTAL')) continue;
+      if (!date || !amount || !/^[A-Z]{3}$/.test(currency)) continue;
       const { symbol, isin } = parseDividendDescription(r[ix.desc]);
       dividends.push(newDividend({
         symbol, isin, date, amount: round2(amount), currency,
@@ -191,32 +260,35 @@ function parseSectionStatement(rows) {
   }
 
   // Quellensteuer den Dividenden zuordnen (gleiches Datum und Symbol)
-  const wh = secs.get('Withholding Tax');
+  const wh = section(secs, 'withholding');
   if (wh) {
-    const h = wh.header;
-    const ix = { cur: col(h, 'Currency'), date: col(h, 'Date'), desc: col(h, 'Description'), amount: col(h, 'Amount') };
+    const ix = fourCols(wh.header);
     for (const r of wh.rows) {
-      const date = toISODate(r[ix.date]);
+      const date = ibkrDate(r[ix.date]);
       const amount = parseNumber(r[ix.amount]);
       if (!date || !amount) continue;
       const { symbol } = parseDividendDescription(r[ix.desc]);
+      // Korrekturbuchungen kommen mit umgekehrtem Vorzeichen – deshalb aufsummieren
       const match = dividends.find((d) => d.date === date && d.symbol === symbol);
-      if (match) match.withholding = round2(Math.abs(amount));
+      if (match) match.withholding = round2((match.withholding || 0) - amount);
       else {
         dividends.push(newDividend({
-          symbol, date, amount: 0, withholding: round2(Math.abs(amount)),
+          symbol, date, amount: 0, withholding: round2(-amount),
           currency: norm(r[ix.cur]).toUpperCase(), note: 'Quellensteuer', source: 'IBKR',
         }));
       }
     }
   }
 
-  const dep = secs.get('Deposits & Withdrawals');
+  const dep = section(secs, 'deposits');
   if (dep) {
     const h = dep.header;
-    const ix = { cur: col(h, 'Currency'), date: col(h, 'Settle Date', 'Date'), desc: col(h, 'Description'), amount: col(h, 'Amount') };
+    const ix = {
+      cur: col(h, 'Currency', 'Währung'), date: col(h, 'Settle Date', 'Abwicklungsdatum', 'Date', 'Datum'),
+      desc: col(h, 'Description', 'Beschreibung'), amount: col(h, 'Amount', 'Betrag'),
+    };
     for (const r of dep.rows) {
-      const date = toISODate(r[ix.date]);
+      const date = ibkrDate(r[ix.date]);
       const amount = parseNumber(r[ix.amount]);
       if (!date || !amount) continue;
       deposits.push({ date, amount: round2(amount), currency: norm(r[ix.cur]).toUpperCase(), note: norm(r[ix.desc]) });

@@ -141,6 +141,9 @@ const R = (name, field, op, value, categoryId, extra = {}) => ({
 const payeeRules = [
   // Überträge / Karten
   ['TopCard / Viseca', 'topcard', 'c_kk_zahlung', 10],
+  ['UBS Card Center', 'ubs card center', 'c_kk_zahlung', 10],
+  ['Auslandzuschlag der Karte', 'zuschlag chf im ausland', 'c_bankgebuehren', 30],
+  ['Auslandzuschlag der Karte (Storno)', 'storno zuschl', 'c_bankgebuehren', 30],
   ['Viseca', 'viseca', 'c_kk_zahlung', 10],
   ['Cornèrcard', 'cornercard', 'c_kk_zahlung', 10],
   ['Swisscard', 'swisscard', 'c_kk_zahlung', 10],
@@ -329,6 +332,15 @@ const branchRules = [
   ['Sonstige Ausgaben (Branche)', 'sonstige ausgaben', 'c_sonstige_ausgaben'],
   ['Andere Direktvertreiber', 'andere direktvertreiber', 'c_sonstige_ausgaben'],
   ['Steuern (Branche)', 'steuern', 'c_steuern_kanton'],
+  ['Aufladung E-Fahrzeug', 'aufladung e fahrzeug', 'c_benzin'],
+  ['Frisör', 'frisor', 'c_koerperpflege'],
+  ['Kosmetika', 'kosmetika', 'c_koerperpflege'],
+  ['Bäckerei', 'backerei', 'c_lebensmittel'],
+  ['Krankenhaus', 'krankenhaus', 'c_arzt'],
+  ['Autoreparatur', 'autoreparatur', 'c_autoservice'],
+  ['Reisebüro', 'reiseburo', 'c_ferien'],
+  ['Büromaterial', 'buromaterial', 'c_haushaltsartikel'],
+  ['Bücher / Zeitschriften', 'bucher zeitschriften', 'c_hobby'],
 ];
 
 /* Kartenzahlungen und Bargeldbezüge stehen je nach Bank im Empfänger- ODER im
@@ -358,8 +370,66 @@ const transferRules = [
   },
 ];
 
+// Was PostFinance selbst als Kategorie mitliefert – als Auffangnetz hinter den
+// Zahlungsempfänger-Regeln. [Name, Kategorie laut PostFinance, Kategorie, Übertrag?]
+const postfinanceRules = [
+  ['Steuern', 'finanzen steuern', 'c_steuern_kanton'],
+  ['Gebühren', 'finanzen gebuhren', 'c_bankgebuehren'],
+  ['Anlegen', 'vermogensaufbau anlegen', 'c_investition'],
+  ['Überträge', 'ubertrage', 'c_umbuchung', true],
+  ['Bargeldbezug', 'finanzen bargeldbezug', 'c_bargeldbezug', true],
+  ['Gastronomie', 'freizeit gastronomie', 'c_restaurant'],
+  ['Lebensmittel', 'einkaufen detail lebensmittel', 'c_lebensmittel'],
+  ['Spenden', 'finanzen spenden', 'c_spenden'],
+  ['Sport', 'freizeit sport', 'c_sport'],
+  ['Nebenkosten', 'wohnen nebenkosten', 'c_nebenkosten'],
+  ['Rückerstattungen', 'ruckerstattungen', 'c_rueckerstattung'],
+];
+
+/** Regeln, die es früher gab und die mehr falsch als richtig einordneten. */
+export const RETIRED_RULE_IDS = [
+  // „Gutschrift über 3000“ machte aus jedem grösseren Übertrag einen Lohn
+  'sys_gutschrift_gross',
+  // „Dauerauftrag“ ist bei UBS eine Buchungsart – damit landete die Miete unter Sparen
+  'sys_dauerauftrag_sparen',
+];
+
 export const DEFAULT_RULES = [
   ...transferRules,
+  {
+    // Steht vor den Zahlungsempfängern: heisst der Arbeitgeber wie ein Laden, ist der Lohn kein Einkauf
+    id: 'sys_salaerzahlung', name: 'Lohnzahlung des Arbeitgebers', match: 'all', sort: 8,
+    conditions: [
+      { field: 'rawText', op: 'regex', value: '(sal[aä]rzahlung|lohnzahlung|sal[aä]r\\b|gehaltszahlung)' },
+      { field: 'amount', op: 'gt', value: 0 },
+    ],
+    actions: { categoryId: 'c_lohn' },
+  },
+  {
+    id: 'sys_ibkr_auszahlung', name: 'Auszahlung von Interactive Brokers', match: 'all', sort: 20,
+    conditions: [{ field: 'rawText', op: 'contains', value: 'ROC/IBCD' }],
+    actions: { categoryId: 'c_investition' },
+  },
+  {
+    id: 'sys_miete', name: 'Miete', match: 'all', sort: 60,
+    conditions: [
+      { field: 'description', op: 'regex', value: '\\bmiete\\b' },
+      { field: 'amount', op: 'lt', value: 0 },
+    ],
+    actions: { categoryId: 'c_miete' },
+  },
+  {
+    id: 'sys_parkplatzmiete', name: 'Parkplatz', match: 'all', sort: 60,
+    conditions: [
+      { field: 'description', op: 'contains', value: 'parkplatz' },
+      { field: 'amount', op: 'lt', value: 0 },
+    ],
+    actions: { categoryId: 'c_parking' },
+  },
+  ...postfinanceRules.map(([name, value, categoryId, transfer]) =>
+    R(`PostFinance: ${name}`, 'merchantCategory', 'contains', value, categoryId, {
+      sort: 210, actions: transfer ? { isTransfer: true } : {},
+    })),
   ...payeeRules.map(([name, value, categoryId, sort]) =>
     R(`Zahlungsempfänger: ${name}`, 'payee', 'contains', value, categoryId, {
       sort,
@@ -377,14 +447,6 @@ export const DEFAULT_RULES = [
     actions: { categoryId: 'c_lohn' },
   },
   {
-    id: 'sys_gutschrift_gross', name: 'Grosse Gutschrift als Lohn', match: 'all', sort: 310,
-    conditions: [
-      { field: 'description', op: 'contains', value: 'gutschrift' },
-      { field: 'amount', op: 'gt', value: 3000 },
-    ],
-    actions: { categoryId: 'c_lohn' },
-  },
-  {
     id: 'sys_uebertrag', name: 'Interne Überträge', match: 'any', sort: 15,
     conditions: [
       { field: 'description', op: 'contains', value: 'uebertrag' },
@@ -392,10 +454,5 @@ export const DEFAULT_RULES = [
       { field: 'payee', op: 'contains', value: 'menzi u/o' },
     ],
     actions: { categoryId: 'c_umbuchung', isTransfer: true },
-  },
-  {
-    id: 'sys_dauerauftrag_sparen', name: 'Dauerauftrag Sparen', match: 'all', sort: 320,
-    conditions: [{ field: 'description', op: 'contains', value: 'dauerauftrag' }],
-    actions: { categoryId: 'c_sparen' },
   },
 ];

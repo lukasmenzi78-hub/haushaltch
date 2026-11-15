@@ -172,10 +172,31 @@ sobald wieder Verbindung besteht.
 
 ## Teil 4 – Erste Schritte
 
-1. **Import** öffnen und die Excel-Dateien der Banken hineinziehen. Erkannt werden:
-   - UBS Privatkonto (die aus dem PDF extrahierten Arbeitsmappen)
-   - UBS Kreditkarte, Coop Supercard / Viseca, PostFinance (13-spaltiges Format)
-   - PostFinance-CSV sowie beliebige andere CSV/Excel-Dateien über die Spaltenzuordnung
+1. **Import** öffnen und die Dateien der Banken hineinziehen. Erkannt werden:
+   - **UBS Privat- und Sparkonto** – der CSV-Export aus dem E-Banking. Die App liest
+     IBAN, Anfangs- und Schlusssaldo aus dem Dateikopf, legt je Konto ein eigenes Konto
+     an und prüft selbst nach, ob Anfangssaldo plus Buchungen den Schlusssaldo ergibt.
+   - **PostFinance** – der CSV-Export „Bewegungen“. Zahlungsempfänger, Buchungsart und
+     Mitteilung werden aus dem Avisierungstext herausgelöst.
+   - **UBS Kreditkarte, Coop Supercard / Viseca** (13-spaltiges Format, CSV oder Excel).
+     Diese Exporte enden nach 200 Zeilen – für ein ganzes Jahr also mehrere Zeiträume
+     exportieren. Überschneidungen sind kein Problem.
+   - UBS Privatkonto als aus dem PDF extrahierte Arbeitsmappe
+   - beliebige andere CSV/Excel-Dateien über die Spaltenzuordnung
+
+   **Die Dateien am besten so importieren, wie die Bank sie liefert.** Wer eine CSV in
+   Excel öffnet und wieder speichert, bekommt eine veränderte Datei: Excel packt jede
+   Zeile in eine einzige Zelle und schreibt Datumsangaben um. Die App erkennt das und
+   stellt die ursprünglichen Zeilen wieder her (im Assistenten erscheint dann ein
+   Hinweis). Fehlen aber die Kopfzeilen der Bank ganz, etwa weil sie vor dem Speichern
+   gelöscht wurden, fehlt der App auch die IBAN – und damit die Grundlage, um Überträge
+   auf dieses Konto sicher zu erkennen.
+
+   **Überträge zwischen den eigenen Konten** erkennt die App an der IBAN im
+   Buchungstext: Geht eine Zahlung an ein Konto, das in der App vorhanden ist, zählt sie
+   weder als Ausgabe noch als Einnahme, und die beiden Seiten werden miteinander
+   verknüpft. Das wird nach jedem Import neu geprüft – die Reihenfolge der Dateien
+   spielt keine Rolle.
 2. Im Assistenten kontrollieren: Konto, Person je Karte, Saldo. Bei Kartenauszügen ohne
    Saldo den aktuellen Kontostand eintragen – sonst stimmt das Nettovermögen nicht.
 3. **Dieselbe Datei zweimal importieren schadet nicht.** Die App vergleicht jede Zeile
@@ -261,8 +282,11 @@ Die Ansicht **Anlagen** führt einzelne Positionen statt nur eines Depotsaldos.
 ### Positionen erfassen
 
 - **IBKR-Auszug importieren:** In der Client Portal unter *Performance & Reports →
-  Statements* ein **Activity Statement** als CSV herunterladen (oder eine Flex Query mit
-  den Abschnitten *Open Positions*, *Dividends*, *Withholding Tax*). Datei ins
+  Statements* ein **Activity Statement** als CSV herunterladen (in der deutschen
+  Oberfläche heisst er „Umsatzübersicht“; beide Sprachen werden gelesen – oder eine Flex
+  Query mit den Abschnitten *Open Positions*, *Dividends*, *Withholding Tax*). Jedes
+  IBKR-Konto bekommt ein eigenes Depot, erkannt an der Kontonummer im Auszug; der
+  Barbestand wird auf Wunsch mit übernommen. Datei ins
   Import-Fenster ziehen – die App erkennt sie automatisch, legt das Depot an und
   übernimmt Positionen, Einstandskurse und Dividenden inklusive Quellensteuer.
   Beim zweiten Import werden vorhandene Positionen **aktualisiert**, nicht verdoppelt;

@@ -55,6 +55,10 @@ export function analyseWorkbook(fileObj, opts = {}) {
     let parsed;
     try { parsed = parseSheet(sheet.rows, opts); }
     catch (e) { parsed = { format: FORMATS.GENERIC, transactions: [], warnings: [String(e.message || e)], account: null }; }
+    if (sheet.rows?.excelRewrapped) {
+      parsed.warnings = [...(parsed.warnings || []),
+        'Diese Datei wurde in Excel geöffnet und neu gespeichert. Die ursprünglichen Zeilen der Bank wurden wiederhergestellt – am sichersten ist trotzdem der unveränderte Download.'];
+    }
     return { sheetName: sheet.name, rows: sheet.rows, parsed };
   });
   const best = results.slice().sort((a, b) => b.parsed.transactions.length - a.parsed.transactions.length)[0];
@@ -119,8 +123,84 @@ function looseKeysOfRelatedAccounts(parsed, options) {
   return keys;
 }
 
+/* ---------------- Überträge zwischen eigenen Konten ---------------- */
+
+const IBAN_RE = /\bCH\d{2}(?:\s?[0-9A-Z]{4}){4}\s?[0-9A-Z]\b/g;
+const TRANSFER_CATEGORIES = new Set(['c_umbuchung', 'c_kk_zahlung', 'c_bargeldbezug']);
+const cleanIban = (v) => String(v || '').toUpperCase().replace(/\s+/g, '');
+
+/** Alle Schweizer IBANs, die in einem Buchungstext vorkommen (ohne Leerzeichen). */
+export function ibansIn(text) {
+  return [...String(text || '').toUpperCase().matchAll(IBAN_RE)].map((m) => cleanIban(m[0]));
+}
+
+function ownIbanMap() {
+  const map = new Map();
+  for (const a of store.idx.accounts) if (a.iban) map.set(cleanIban(a.iban), a.id);
+  return map;
+}
+
+/** Eigenes Konto, das im Buchungstext als Gegenseite genannt wird – sonst null. */
+function ownCounterAccount(txn, ibans, selfIban = '') {
+  for (const iban of ibansIn(txn.rawText)) {
+    if (iban === selfIban) continue;
+    const id = ibans.get(iban);
+    if (id && id !== txn.accountId) return id;
+  }
+  return null;
+}
+
+/**
+ * Sucht Buchungen, die auf ein eigenes Konto gehen oder von dort kommen, und
+ * kennzeichnet sie als Übertrag. Massgebend ist die IBAN im Buchungstext – das ist
+ * sicherer als jede Textregel. Findet sich auf dem Gegenkonto die Buchung mit dem
+ * umgekehrten Betrag, werden beide verknüpft; so wird z. B. der Dauerauftrag
+ * „Lohn“ aufs gemeinsame Konto dort nicht noch einmal als Einkommen gezählt.
+ * Läuft nach jedem Import über alle Buchungen, damit die Reihenfolge der Importe
+ * keine Rolle spielt.
+ */
+export function reconcileOwnTransfers(days = 5) {
+  const ibans = ownIbanMap();
+  if (!ibans.size) return { marked: 0, linked: 0 };
+  const txns = store.idx.transactions;
+  const updates = new Map();
+  const cur = (t) => updates.get(t.id) || t;
+  const asTransfer = (t, extra = {}) => ({
+    ...t, ...extra, isTransfer: true,
+    categoryId: TRANSFER_CATEGORIES.has(t.categoryId) || t.categoryLockedByUser ? t.categoryId : 'c_umbuchung',
+  });
+  let marked = 0, linked = 0;
+
+  for (const t of txns) {
+    if (cur(t).transferPairId) continue;
+    const targetId = ownCounterAccount(t, ibans);
+    if (!targetId) continue;
+    if (!cur(t).isTransfer) { updates.set(t.id, asTransfer(cur(t))); marked++; }
+
+    // Gegenbuchung auf dem anderen Konto: gleicher Betrag mit umgekehrtem Vorzeichen
+    const span = days * 86400000;
+    let mate = null, best = Infinity;
+    for (const o of txns) {
+      if (o.accountId !== targetId || o.id === t.id || cur(o).transferPairId) continue;
+      if (o.currency !== t.currency || round2(o.amount) !== round2(-t.amount)) continue;
+      const gap = Math.abs(new Date(o.date) - new Date(t.date));
+      if (gap <= span && gap < best) { mate = o; best = gap; }
+    }
+    if (mate) {
+      if (!cur(mate).isTransfer) marked++;
+      updates.set(t.id, { ...cur(t), transferPairId: mate.id });
+      updates.set(mate.id, asTransfer(cur(mate), { transferPairId: t.id }));
+      linked++;
+    }
+  }
+  if (updates.size) store.upsertMany('transactions', [...updates.values()], 'Eigene Überträge erkannt');
+  return { marked, linked };
+}
+
 export function buildPlan(parsed, options = {}) {
   const rules = store.idx.rules;
+  const ownIbans = ownIbanMap();
+  const selfIban = cleanIban(parsed.account?.iban);
   const existingKeys = store.idx.dedupKeys;
   const looseKeys = looseKeysOfRelatedAccounts(parsed, options);
   const seenLoose = new Map();
@@ -173,6 +253,11 @@ export function buildPlan(parsed, options = {}) {
       const { patch } = evaluate(draft, rules);
       delete patch.ruleId;
       Object.assign(draft, patch);
+    }
+    // Geht die Buchung laut IBAN auf ein eigenes Konto, ist sie ein Übertrag
+    if (!draft.isTransfer && ownCounterAccount(draft, ownIbans, selfIban)) {
+      draft.isTransfer = true;
+      draft.categoryId = 'c_umbuchung';
     }
     if (!draft.categoryId) draft.categoryId = 'c_unkategorisiert';
 
@@ -251,7 +336,9 @@ export function applyPlan(plan, options = {}) {
       }
     }
   });
-  return { imported: txns.length, importId };
+  // Mit den neuen Buchungen (und allenfalls einem neu bekannten Konto) nochmals prüfen
+  const own = reconcileOwnTransfers();
+  return { imported: txns.length, importId, ownTransfers: own };
 }
 
 /** Import rückgängig machen (alle Buchungen eines Import-Laufs entfernen). */

@@ -303,11 +303,9 @@ export function detectDelimiter(text) {
   return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0] || ';';
 }
 
-export function parseCSV(text, delimiter) {
-  const d = delimiter || detectDelimiter(text);
+function splitCsv(src, d) {
   const rows = [];
   let row = [], field = '', inQ = false;
-  const src = text.replace(/^﻿/, '');
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
     if (inQ) {
@@ -322,7 +320,51 @@ export function parseCSV(text, delimiter) {
     else field += ch;
   }
   if (field.length || row.length) { row.push(field); rows.push(row); }
-  return rows.filter((r) => r.some((c) => String(c).trim() !== ''));
+  return rows;
+}
+
+const nonEmptyRows = (rows) => rows.filter((r) => r.some((c) => String(c).trim() !== ''));
+
+/**
+ * Macht rückgängig, was Excel mit einer Strichpunkt-CSV anstellt, wenn es sie mit
+ * Komma als Listentrennzeichen öffnet und wieder speichert: Jede Bankzeile landet dann
+ * als Ganzes in einer Zelle (in Anführungszeichen, innere Anführungszeichen verdoppelt),
+ * Zeilen mit einem Komma im Text werden an diesem Komma auf zwei Zellen verteilt, und
+ * kürzere Zeilen bekommen Kommas angehängt. Die Zellen einer Zeile wieder mit Komma zu
+ * verbinden, ergibt exakt die ursprüngliche Zeile der Bank.
+ */
+export function unwrapExcelCsv(text) {
+  const src = String(text).replace(/^﻿/, '');
+  return splitCsv(src, ',').map((cells) => {
+    let end = cells.length;
+    while (end > 0 && cells[end - 1] === '') end--;
+    return cells.slice(0, end).join(',');
+  }).join('\n');
+}
+
+/** Zeilen, die nach einer Tabelle aussehen – Massstab dafür, welche Lesart besser passt. */
+const tableScore = (rows) => rows.filter((r) => r.length >= 3).length;
+
+/**
+ * Liest CSV-Text in Zeilen. Ohne vorgegebenes Trennzeichen wird es erkannt; zusätzlich
+ * wird geprüft, ob die Datei eine in Excel neu gespeicherte Strichpunkt-CSV ist. In dem
+ * Fall trägt das Ergebnis die Eigenschaft `excelRewrapped = true`.
+ */
+export function parseCSV(text, delimiter) {
+  const src = String(text).replace(/^﻿/, '');
+  if (delimiter) return nonEmptyRows(splitCsv(src, delimiter));
+
+  const direct = nonEmptyRows(splitCsv(src, detectDelimiter(src)));
+  const lines = src.split(/\r?\n/).filter((l) => l.trim() !== '');
+  const withSemicolon = lines.filter((l) => l.includes(';')).length;
+  if (lines.length && withSemicolon >= lines.length / 2) {
+    const restored = nonEmptyRows(splitCsv(unwrapExcelCsv(src), ';'));
+    if (tableScore(restored) >= 2 && tableScore(restored) > tableScore(direct)) {
+      restored.excelRewrapped = true;
+      return restored;
+    }
+  }
+  return direct;
 }
 
 /* ---------------- Farben ---------------- */

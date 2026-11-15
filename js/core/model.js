@@ -1,8 +1,8 @@
 // model.js — Datenschema, Standardwerte, Migration und Merge-Logik
 import { uid, now, clone, todayISO } from './util.js';
-import { DEFAULT_CATEGORY_GROUPS, DEFAULT_CATEGORIES, DEFAULT_RULES } from './categories.js';
+import { DEFAULT_CATEGORY_GROUPS, DEFAULT_CATEGORIES, DEFAULT_RULES, RETIRED_RULE_IDS } from './categories.js';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** Alle Sammlungen sind Arrays von Records mit { id, updatedAt, deleted? }.
  *  Dadurch lässt sich ein Dokument zweier Geräte record-genau zusammenführen. */
@@ -267,7 +267,28 @@ export function migrate(doc) {
       if (!r.updatedAt) r.updatedAt = t;
     }
   }
+  if ((doc.schemaVersion || 0) < 4) syncSystemRules(doc, t);
   doc.schemaVersion = SCHEMA_VERSION;
+  return doc;
+}
+
+/**
+ * Bringt die mitgelieferten Regeln eines bestehenden Dokuments auf den aktuellen Stand:
+ * neue Standardregeln kommen dazu, zurückgezogene werden gelöscht. Eigene Regeln und
+ * solche, die der Nutzer bewusst gelöscht hat (Tombstone), bleiben unberührt.
+ * Mehrfaches Ausführen ändert nichts mehr – wichtig, weil ein Gerät mit älterer
+ * App-Fassung die Versionsnummer in der gemeinsamen Datei wieder zurücksetzen kann.
+ */
+export function syncSystemRules(doc, t = now()) {
+  if (!doc.rules.length) return doc;            // leeres Dokument: Regeln kommen mit newDoc()
+  const byId = new Map(doc.rules.map((r) => [r.id, r]));
+  for (const rule of DEFAULT_RULES) {
+    if (!byId.has(rule.id)) doc.rules.push({ ...clone(rule), enabled: true, updatedAt: t });
+  }
+  for (const id of RETIRED_RULE_IDS) {
+    const r = byId.get(id);
+    if (r && !r.deleted) { r.deleted = true; r.updatedAt = t; }
+  }
   return doc;
 }
 
