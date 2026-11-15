@@ -1,5 +1,5 @@
 // sw.js — Service Worker: App-Hülle offline verfügbar halten
-const VERSION = 'haushaltch-v1.4.2';
+const VERSION = 'haushaltch-v1.4.3';
 const SHELL = [
   './',
   './index.html',

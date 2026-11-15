@@ -1,6 +1,6 @@
 // sync.js — OneDrive-Synchronisation über Microsoft Graph (MSAL, PKCE, ohne Server)
 import { store } from './store.js';
-import { mergeDocs, migrate, COLLECTIONS } from './model.js';
+import { mergeDocs, migrate, COLLECTIONS, SCHEMA_VERSION } from './model.js';
 import { debounce, now } from './util.js';
 
 const LS_CLIENT_ID = 'swissfin.clientId';
@@ -200,6 +200,7 @@ export async function useRemoteFile({ driveId, itemId, name, path, shared }) {
 
 /** Enthält der zusammengeführte Stand etwas, das in der Datei so nicht steht? */
 function differsFrom(merged, remoteDoc) {
+  if ((remoteDoc.schemaVersion || 0) !== (merged.schemaVersion || 0)) return true;
   if ((merged.settings?.updatedAt || 0) !== (remoteDoc.settings?.updatedAt || 0)) return true;
   for (const coll of COLLECTIONS) {
     const remote = new Map((remoteDoc[coll] || []).map((r) => [r.id, r.updatedAt || 0]));
@@ -216,7 +217,11 @@ export async function pull({ force = false } = {}) {
   try {
     const item = await ensureRemoteFile();
     const remote = store.meta.remote;
-    if (!force && remote.eTag && item.eTag === remote.eTag) {
+    // Liegt die Datei laut letztem Abgleich noch in einem älteren Format vor, als diese
+    // App-Fassung schreibt, trotzdem ganz holen: dann wird sie beim Zusammenführen auf
+    // den neuen Stand gebracht und wieder hochgeladen (z. B. einmalige Reparaturen).
+    const remoteCurrent = (remote.schema || 0) >= SCHEMA_VERSION;
+    if (!force && remoteCurrent && remote.eTag && item.eTag === remote.eTag) {
       // Auch ohne Änderung war das ein erfolgreicher Abgleich – sonst stünde in den
       // Einstellungen dauerhaft „zuletzt nie“.
       await store.saveMeta({ lastSyncAt: now() });
@@ -228,17 +233,20 @@ export async function pull({ force = false } = {}) {
     if (typeof incoming === 'string') {
       try { incoming = JSON.parse(incoming); } catch { throw new Error('Datei auf OneDrive ist kein gültiges JSON.'); }
     }
+    // Vergleichsbasis ist die Datei, wie sie wirklich ist – vor der Migration. Sonst
+    // gälte alles, was die Migration hier ändert, als „schon in der Datei“ und käme nie hoch.
+    const remoteRaw = structuredClone(incoming);
     const remoteDoc = migrate(incoming);
     const { doc, stats } = mergeDocs(store.doc, remoteDoc);
     // Hat dieses Gerät etwas, das in der Datei fehlt oder älter ist, muss es hoch –
     // auch wenn hier gerade nichts bearbeitet wurde (z. B. erster Abgleich mit Daten,
-    // die vor der Anmeldung importiert wurden).
-    const needsUpload = differsFrom(doc, remoteDoc);
+    // die vor der Anmeldung importiert wurden, oder eine Formatumstellung).
+    const needsUpload = differsFrom(doc, remoteRaw);
     store.replaceDoc(doc, 'sync-pull');
     // Erst das Dokument sichern, dann den eTag. Andernfalls gilt ein nie gespeicherter
     // Stand als „schon geholt“ und die Daten des anderen Geräts kämen nie wieder an.
     await store.persist();
-    await store.saveMeta({ remote: { ...remote, eTag: item.eTag }, lastSyncAt: now(), ...(needsUpload ? { dirty: true } : {}) });
+    await store.saveMeta({ remote: { ...remote, eTag: item.eTag, schema: remoteRaw.schemaVersion || 0 }, lastSyncAt: now(), ...(needsUpload ? { dirty: true } : {}) });
     emit({ busy: false, status: 'synchronisiert', message: 'Aktuell', lastSync: now(), error: null });
     return { merged: stats };
   } catch (e) {
@@ -278,7 +286,7 @@ export async function push({ retries = 3 } = {}) {
     if (!res.ok) throw new Error(`Speichern fehlgeschlagen (${res.status})`);
     const body = await res.json();
     store.meta.dirty = false;
-    await store.saveMeta({ remote: { ...remote, eTag: body.eTag }, lastSyncAt: now() });
+    await store.saveMeta({ remote: { ...remote, eTag: body.eTag, schema: store.doc.schemaVersion || 0 }, lastSyncAt: now() });
     emit({ busy: false, status: 'synchronisiert', message: 'Gespeichert', lastSync: now(), error: null });
     return { ok: true };
   } catch (e) {

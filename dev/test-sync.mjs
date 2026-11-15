@@ -185,6 +185,35 @@ check(drive.rejected > rejectedBefore, 'OneDrive weist den veralteten Upload ab 
 check(notes2.includes('zweite von A') && notes2.includes('zweite von B'), 'nach dem Zusammenführen sind beide Änderungen in OneDrive');
 check(same(await idsOn(A), remoteIds()) && same(await idsOn(B), remoteIds()), 'beide Geräte danach gleich');
 
+// 6) Datei in älterem Format (z. B. von einer früheren App-Fassung geschrieben):
+//    Ein Gerät mit der aktuellen Fassung muss sie auf den neuen Stand bringen und
+//    wieder hochladen – auch wenn sich die Datei seit dem letzten Abgleich nicht
+//    geändert hat (gleicher eTag).
+const oldFormat = () => {
+  const doc = JSON.parse(drive.file.content);
+  doc.schemaVersion = 4;
+  // eine Buchung mit losem Übertragsverweis, wie sie frühere Fassungen hinterliessen
+  const t = doc.transactions.find((x) => !x.deleted && x.amount < 0) || doc.transactions[0];
+  Object.assign(t, { isTransfer: true, transferPairId: 'txn_gibt_es_nicht', updatedAt: Date.now() });
+  return { doc, id: t.id };
+};
+const fileState = (id) => { const d = JSON.parse(drive.file.content); const t = d.transactions.find((x) => x.id === id); return { schema: d.schemaVersion, dangling: !!t?.transferPairId }; };
+const { SCHEMA } = await A.page.evaluate(async () => ({ SCHEMA: (await import('./js/core/model.js')).SCHEMA_VERSION }));
+let probe = oldFormat();
+drive.file = { ...drive.file, content: JSON.stringify(probe.doc), version: drive.file.version + 1 };   // neuer eTag
+await settle(A);
+console.log('\n5. Datei im älteren Format');
+let st = fileState(probe.id);
+check(st.schema === SCHEMA && !st.dangling, `nach Änderung der Datei: auf Format ${SCHEMA} gebracht und repariert hochgeladen (Format ${st.schema})`);
+probe = oldFormat();
+drive.file = { ...drive.file, content: JSON.stringify(probe.doc) };                                    // gleicher eTag
+await A.page.evaluate(async () => { const { store } = await import('./js/core/store.js'); const r = { ...store.meta.remote }; delete r.schema; await store.saveMeta({ remote: r }); });
+await settle(A);
+st = fileState(probe.id);
+check(st.schema === SCHEMA && !st.dangling, `bei unverändertem eTag (Gerät kennt das Dateiformat nicht): ebenfalls repariert (Format ${st.schema})`);
+await settle(B);
+check(same(await idsOn(A), remoteIds()) && same(await idsOn(B), remoteIds()), 'beide Geräte danach gleich');
+
 console.log(`\nOneDrive-Nachbau: ${drive.puts} Uploads, ${drive.rejected} wegen veraltetem Stand abgewiesen`);
 check(errors.length === 0, `keine Fehler in der Konsole${errors.length ? ': ' + errors.slice(0, 2).join(' / ') : ''}`);
 await browser.close(); server.close();
