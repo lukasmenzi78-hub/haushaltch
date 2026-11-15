@@ -1,6 +1,6 @@
 // sync.js — OneDrive-Synchronisation über Microsoft Graph (MSAL, PKCE, ohne Server)
 import { store } from './store.js';
-import { mergeDocs, migrate } from './model.js';
+import { mergeDocs, migrate, COLLECTIONS } from './model.js';
 import { debounce, now } from './util.js';
 
 const LS_CLIENT_ID = 'swissfin.clientId';
@@ -159,13 +159,12 @@ export async function ensureRemoteFile() {
   const remote = store.meta.remote;
   if (remote?.itemId) {
     const meta = await graph(itemUrl(remote));
-    if (meta.ok) {
-      // eTag immer mitschreiben: ohne ihn würde ein späterer Upload ungeschützt laufen
-      if (meta.body.eTag !== remote.eTag) {
-        await store.saveMeta({ remote: { ...remote, eTag: meta.body.eTag } });
-      }
-      return meta.body;
-    }
+    // Den eTag hier NICHT übernehmen. Er steht für „diesen Stand der Datei habe ich
+    // schon eingearbeitet“ und darf erst nach einem erfolgreichen Holen (pull) oder
+    // Hochladen (push) gesetzt werden. Würde er hier aufgefrischt, hielte pull() jede
+    // fremde Änderung für bereits bekannt, und push() überschriebe sie mit einem
+    // scheinbar gültigen if-match.
+    if (meta.ok) return meta.body;
     // Die bekannte Datei ist weg (verschoben, Freigabe entzogen). Auf keinen Fall
     // still eine neue anlegen – sonst arbeiten die Geräte unbemerkt getrennt weiter.
     throw new Error('Die verbundene Datei ist nicht mehr erreichbar. Bitte unter '
@@ -174,7 +173,9 @@ export async function ensureRemoteFile() {
   const path = getFilePath();
   const meta = await graph(`/me/drive/root:/${encodeURI(path)}`);
   if (meta.ok) {
-    await store.saveMeta({ remote: { driveId: meta.body.parentReference?.driveId, itemId: meta.body.id, name: meta.body.name, path, eTag: meta.body.eTag } });
+    // Die Datei gibt es schon (z. B. vom anderen Gerät angelegt). Ohne eTag merken,
+    // damit der erste Abgleich ihren Inhalt holt und mit den lokalen Daten zusammenführt.
+    await store.saveMeta({ remote: { driveId: meta.body.parentReference?.driveId, itemId: meta.body.id, name: meta.body.name, path, eTag: null } });
     return meta.body;
   }
   // Neu anlegen
@@ -197,6 +198,18 @@ export async function useRemoteFile({ driveId, itemId, name, path, shared }) {
 
 /* ---------------- Pull / Push ---------------- */
 
+/** Enthält der zusammengeführte Stand etwas, das in der Datei so nicht steht? */
+function differsFrom(merged, remoteDoc) {
+  if ((merged.settings?.updatedAt || 0) !== (remoteDoc.settings?.updatedAt || 0)) return true;
+  for (const coll of COLLECTIONS) {
+    const remote = new Map((remoteDoc[coll] || []).map((r) => [r.id, r.updatedAt || 0]));
+    for (const r of merged[coll] || []) {
+      if (!remote.has(r.id) || remote.get(r.id) !== (r.updatedAt || 0)) return true;
+    }
+  }
+  return false;
+}
+
 export async function pull({ force = false } = {}) {
   if (!account) return { skipped: true };
   emit({ busy: true, status: 'arbeitet', message: 'Lade Daten …' });
@@ -215,12 +228,17 @@ export async function pull({ force = false } = {}) {
     if (typeof incoming === 'string') {
       try { incoming = JSON.parse(incoming); } catch { throw new Error('Datei auf OneDrive ist kein gültiges JSON.'); }
     }
-    const { doc, stats } = mergeDocs(store.doc, migrate(incoming));
+    const remoteDoc = migrate(incoming);
+    const { doc, stats } = mergeDocs(store.doc, remoteDoc);
+    // Hat dieses Gerät etwas, das in der Datei fehlt oder älter ist, muss es hoch –
+    // auch wenn hier gerade nichts bearbeitet wurde (z. B. erster Abgleich mit Daten,
+    // die vor der Anmeldung importiert wurden).
+    const needsUpload = differsFrom(doc, remoteDoc);
     store.replaceDoc(doc, 'sync-pull');
     // Erst das Dokument sichern, dann den eTag. Andernfalls gilt ein nie gespeicherter
     // Stand als „schon geholt“ und die Daten des anderen Geräts kämen nie wieder an.
     await store.persist();
-    await store.saveMeta({ remote: { ...remote, eTag: item.eTag }, lastSyncAt: now() });
+    await store.saveMeta({ remote: { ...remote, eTag: item.eTag }, lastSyncAt: now(), ...(needsUpload ? { dirty: true } : {}) });
     emit({ busy: false, status: 'synchronisiert', message: 'Aktuell', lastSync: now(), error: null });
     return { merged: stats };
   } catch (e) {
