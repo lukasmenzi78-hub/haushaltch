@@ -13,6 +13,7 @@ node dev/ibkr-check.mjs samples          # IBKR: Gelesenes gegen die Summen im A
 PW_CHROMIUM=/pfad/zu/chrome node dev/test-import.mjs samples   # End-zu-End über die Oberfläche
 PW_CHROMIUM=/pfad/zu/chrome node dev/test-sync.mjs samples     # zwei Geräte gegen einen OneDrive-Nachbau
 PW_CHROMIUM=/pfad/zu/chrome node dev/test-budget.mjs           # Budgetmethoden mit festen Zahlen (ohne Auszüge)
+PW_CHROMIUM=/pfad/zu/chrome node dev/test-quotes.mjs           # Kursabruf gegen einen Twelve-Data-Nachbau
 ```
 
 `test-import.mjs` startet die App in einem frischen Browserprofil, importiert jede Datei

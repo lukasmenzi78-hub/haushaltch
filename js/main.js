@@ -12,7 +12,8 @@ import { renderBudget } from './ui/budget.js';
 import { renderGoals } from './ui/goals.js';
 import { renderReports } from './ui/reports.js';
 import { renderNetWorth } from './ui/networth.js';
-import { renderInvestments } from './ui/investments.js';
+import { renderInvestments, reportRefresh } from './ui/investments.js';
+import * as quotes from './core/quotes.js';
 import { renderImport } from './ui/importview.js';
 import { renderSettings, applyTheme } from './ui/settings.js';
 
@@ -141,6 +142,19 @@ async function boot() {
 
   sync.flushOnUnload();
   sync.initAuth().catch((e) => console.warn('Sync-Init:', e.message));
+
+  // Wertschriftenkurse einmal pro Tag im Hintergrund holen – nur auf Geräten mit
+  // eigenem Kurs-Schlüssel, und nur Positionen, deren Kurs älter als 20 Stunden ist.
+  // Bricht der Abruf ab (App geschlossen), setzt er beim nächsten Start fort.
+  setTimeout(() => {
+    if (!navigator.onLine || !quotes.isConfigured()) return;
+    const stale = store.idx.holdings.some((h) => h.symbol && !h.archived && quotes.isUsListing(h)
+      && (!h.lastPriceAt || Date.now() - h.lastPriceAt > quotes.STALE_MS));
+    if (!stale) return;
+    quotes.refreshQuotes({ force: false })
+      .then((res) => { if (res.updated) reportRefresh(res, { quiet: true }); })
+      .catch((e) => console.warn('Kursabruf:', e.message));
+  }, 8000);
 
   // Kurse höchstens einmal pro Tag aktualisieren
   const last = lastFxUpdate();

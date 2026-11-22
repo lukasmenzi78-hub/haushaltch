@@ -9,7 +9,7 @@ import {
   portfolio, allocation, evaluatePosition, valueHistory, performanceBreakdown,
   dividendsByYear, dividendYield, writeSnapshot,
 } from '../core/investments.js';
-import { refreshQuotes, setManualPrice, isConfigured, getProvider, PROVIDERS } from '../core/quotes.js';
+import { refreshQuotes, setManualPrice, isConfigured, isRefreshing, getProvider, PROVIDERS } from '../core/quotes.js';
 import { chart, meter } from './charts.js';
 import {
   modal, toast, confirmDialog, emptyState, statTile, segmented, accountSelect, colorSwatches, warningCard,
@@ -306,16 +306,20 @@ async function doRefresh(rerender) {
     });
     return;
   }
+  if (isRefreshing()) { toast('Der Kursabruf läuft bereits.', 'info'); return; }
   const t = toast('Kurse werden geholt …', 'info', { timeout: 0 });
+  const label = t.querySelector('span');
   try {
-    const res = await refreshQuotes({ force: true });
+    const res = await refreshQuotes({
+      force: true,
+      onProgress: ({ done, total, waiting }) => {
+        if (label) label.textContent = waiting
+          ? `Kurse ${done} von ${total} – Gratis-Tarif erlaubt nur wenige pro Minute, nächstes Paket in einer Minute …`
+          : `Kurse werden geholt … ${done} von ${total}`;
+      },
+    });
     t.remove();
-    if (res.skipped) toast(res.reason || 'Keine Positionen mit Symbol.', 'info');
-    else if (res.failed?.length) {
-      toast(`${res.updated} Kurse aktualisiert, ${res.failed.length} ohne Ergebnis`, 'error', {
-        action: { label: 'Details', onClick: () => showFailures(res.failed) },
-      });
-    } else toast(`${res.updated} Kurse aktualisiert (${res.provider})`, 'success');
+    reportRefresh(res);
     rerender?.();
   } catch (e) {
     t.remove();
@@ -323,14 +327,29 @@ async function doRefresh(rerender) {
   }
 }
 
+/** Ergebnis eines Kursabrufs melden (auch für den täglichen Abruf im Hintergrund). */
+export function reportRefresh(res, { quiet = false } = {}) {
+  if (res.skipped) { if (!quiet) toast(res.reason || 'Keine Positionen mit Symbol.', 'info'); return; }
+  const real = (res.failed || []).filter((f) => !f.notCovered);
+  if (real.length || res.notCovered) {
+    toast(`${res.updated} Kurse aktualisiert`
+      + (res.notCovered ? `, ${res.notCovered} ausserhalb der USA nicht im Gratis-Tarif` : '')
+      + (real.length ? `, ${real.length} ohne Ergebnis` : ''), real.length ? 'error' : 'info', {
+      timeout: 9000,
+      action: { label: 'Details', onClick: () => showFailures(res.failed) },
+    });
+  } else toast(`${res.updated} Kurse aktualisiert (${res.provider})`, 'success');
+}
+
 function showFailures(failed) {
   modal({
     title: 'Positionen ohne Kurs',
     body: h('div', {},
       h('p', { class: 'small muted' },
-        'Meist stimmt das Börsenkürzel nicht mit dem des Anbieters überein. '
-        + 'Bei nicht-amerikanischen Titeln hilft ein Zusatz wie „UHR:SIX“ oder „NESN:SIX“. '
-        + 'Alternativ den Kurs von Hand setzen.'),
+        'Die Gratis-Tarife der Kursanbieter decken nur US-Börsen ab. Für Titel von der SIX '
+        + 'bleibt der Kurs aus dem letzten IBKR-Auszug stehen – ein neuer Auszug aktualisiert ihn, '
+        + 'oder du setzt ihn von Hand (Klick auf die Position, Feld „Kurs“). Mit einem bezahlten '
+        + 'Tarif lässt sich die Börse im Symbol angeben, z. B. „UHR:SIX“.'),
       h('ul', { class: 'small' }, failed.map((f) => h('li', {}, `${f.symbol}: ${f.error}`)))),
     actions: [{ label: 'Schliessen', variant: 'primary' }],
   });

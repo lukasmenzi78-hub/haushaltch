@@ -307,20 +307,30 @@ Die Ansicht **Anlagen** führt einzelne Positionen statt nur eines Depotsaldos.
 Ein Gratis-Schlüssel bei einem Kursanbieter genügt, einzurichten unter
 **Einstellungen → Kurse**:
 
-1. Bei [twelvedata.com](https://twelvedata.com/pricing) (800 Abfragen pro Tag) oder
+1. Bei [twelvedata.com](https://twelvedata.com/pricing) oder
    [finnhub.io](https://finnhub.io/register) kostenlos registrieren.
 2. Den Schlüssel in die App kopieren und auf **Speichern und prüfen** klicken – die App
    holt testweise einen Kurs.
-3. Ab dann aktualisiert „⟳ Kurse aktualisieren“ alle Positionen; höchstens einmal
-   alle sechs Stunden, damit das Gratiskontingent reicht.
+3. Ab dann holt die App die Kurse **einmal pro Tag beim Start** im Hintergrund – nur für
+   Positionen, deren Kurs älter als 20 Stunden ist. „⟳ Kurse aktualisieren“ holt sie
+   jederzeit von Hand.
+
+Der Gratis-Tarif von Twelve Data erlaubt **8 Titel pro Minute** (800 pro Tag). Bei
+vielen Positionen dauert ein Abruf deshalb ein paar Minuten: Die App fragt in Paketen
+à 8 ab, wartet dazwischen eine Minute und speichert jedes Paket sofort. Wird die App
+vorher geschlossen, setzt der nächste Abruf dort fort.
 
 Der Schlüssel bleibt auf dem jeweiligen Gerät und wird **nicht** über OneDrive geteilt –
 Lea trägt auf ihrem Gerät einen eigenen ein (oder denselben).
 
-US-Titel laufen mit dem normalen Kürzel (`VT`, `SCHD`, `AMZN`). Für die SIX braucht
-Twelve Data einen Zusatz: `NESN:SIX`, `UHR:SIX`, `CHSPI:SIX`. Das Kürzel lässt sich je
-Position anpassen. Ohne Schlüssel funktioniert alles weiter – die Kurse werden dann von
-Hand gepflegt, und die App zeigt an, von wann sie stammen.
+Die Gratis-Tarife decken **nur US-Börsen** ab (`VT`, `SCHD`, `AMZN` …). Titel von der
+SIX – im IBKR-Auszug mit Börse „EBS“ – überspringt die App deshalb, statt sie womöglich
+einem gleichnamigen US-Papier zuzuordnen. Ihr Kurs kommt aus dem letzten IBKR-Auszug
+oder wird von Hand gesetzt. SIX-Kurse gibt es bei Twelve Data erst ab einem bezahlten
+Tarif; dann lässt sich die Börse im Kürzel angeben (`UHR:SIX`). Liefert der Anbieter
+eine andere Währung als die Position hat, verwirft die App den Kurs. Ohne Schlüssel
+funktioniert alles weiter – die Kurse werden dann von Hand gepflegt, und die App
+zeigt an, von wann sie stammen.
 
 ### Was die Ansicht zeigt
 

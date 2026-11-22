@@ -540,12 +540,15 @@ function quotesTab(rerender) {
   card.append(result);
 
   const info = h('section', { class: 'card' });
-  info.append(h('div', { class: 'card-head' }, h('h3', { class: 'grow' }, 'Kürzel für Schweizer Titel')));
+  info.append(h('div', { class: 'card-head' }, h('h3', { class: 'grow' }, 'Was der Gratis-Tarif abdeckt')));
   info.append(h('p', { class: 'small muted' },
-    'US-Titel funktionieren mit dem normalen Kürzel (VT, SCHD, AMZN). Für Titel an der SIX verlangt '
-    + 'Twelve Data den Börsenzusatz, zum Beispiel ', h('span', { class: 'kbd' }, 'NESN:SIX'), ', ',
-    h('span', { class: 'kbd' }, 'UHR:SIX'), ' oder ', h('span', { class: 'kbd' }, 'CHSPI:SIX'),
-    '. Das Kürzel lässt sich in jeder Position anpassen.'));
+    'Die Gratis-Tarife decken nur US-Börsen ab (VT, SCHD, AMZN …). Twelve Data erlaubt dabei 8 Titel pro Minute: '
+    + 'Bei vielen Positionen dauert ein Abruf deshalb einige Minuten – die App wartet zwischen den Paketen selbst '
+    + 'und speichert jedes Paket sofort. Einmal pro Tag holt sie die Kurse beim Start im Hintergrund.'));
+  info.append(h('p', { class: 'small muted' },
+    'Titel von der SIX (im IBKR-Auszug Börse „EBS“) überspringt die App im Gratis-Tarif, statt sie womöglich einem '
+    + 'gleichnamigen US-Papier zuzuordnen. Ihr Kurs kommt aus dem letzten IBKR-Auszug oder wird von Hand gesetzt. '
+    + 'Mit einem bezahlten Tarif lässt sich die Börse im Kürzel angeben, z. B. ', h('span', { class: 'kbd' }, 'UHR:SIX'), '.'));
   return h('div', {}, card, info);
 }
 
