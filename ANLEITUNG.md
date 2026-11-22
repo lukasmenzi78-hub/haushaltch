@@ -214,8 +214,9 @@ sobald wieder Verbindung besteht.
    Buchungen ebenfalls.
 5. **Buchungen → „Nur nicht zugeordnet“** durchgehen. Zu häufigen Empfängern eine Regel
    erstellen (im Buchungsdialog auf *Regel erstellen*) – ab dann läuft es automatisch.
-6. **Budget:** Einkommen und Fixkosten eintragen oder **„Aus Ø 3 Monate“** nutzen.
-   Der flexible Topf ergibt sich dann von selbst.
+6. **Budget:** Einkommen und Kategorien eintragen oder **„Aus Ø 3 Monate“** nutzen.
+   Nullbasiert: so lange anpassen, bis „Noch zu verteilen“ 0 zeigt. Flex-Topf: der
+   flexible Topf ergibt sich dann von selbst.
 7. **Budget → Wiederkehrend** öffnen und die erkannten Serien übernehmen. Danach zeigt
    **Prognose**, wie sich die Konten entwickeln.
 8. **Vermögen:** Immobilie, Hypothek, Säule 3a und Depot als Positionen erfassen –
@@ -344,7 +345,32 @@ den Positionen plus Barbestand, es braucht keinen manuell gepflegten Wert mehr.
 
 ---
 
-## Wie das Flex-Budget rechnet
+## Wie das Budget rechnet
+
+Die App kennt zwei Methoden, umschaltbar unter **Einstellungen → Allgemein →
+Budgetmethode**. Beide nutzen dieselben Kategorien und Budgetbeträge.
+
+### Nullbasiert
+
+> **Noch zu verteilen = geplantes Einkommen − alle Kategorienbudgets**
+
+Ziel ist genau **0**: Jeder Franken, der im Monat eingehen soll, bekommt vorab eine
+Aufgabe. Gezählt werden alle Kategorien mit den Typen Fixkosten, Unregelmässig,
+Flexibel sowie Sparen & Vorsorge – auch die flexiblen Kategorien mit ihrem eigenen
+Betrag. Einkommen und Überträge zählen nicht.
+
+- Grundlage ist das **geplante** Einkommen (die Budgetbeträge in der Gruppe
+  Einkommen), nicht das, was schon eingegangen ist. So lässt sich der Monat im Voraus
+  planen, auch wenn der Lohn erst Ende Monat kommt.
+- Bleibt etwas übrig, weist **„Ausgleichen“** den Rest einer Kategorie zu, z. B.
+  „Sparen allgemein“. Ist mehr verteilt, als eingeht, zieht derselbe Knopf den
+  Überhang bei der gewählten Kategorie ab – nie unter 0.
+- *Restbudget übertragen* erhöht das verfügbare Geld einer Kategorie im Folgemonat,
+  nicht das zu verteilende Einkommen.
+- Die Übersicht zeigt „Noch zu verteilen“, solange das Budget nicht ausgeglichen ist,
+  danach wieder „Flexibel frei“.
+
+### Flex-Topf
 
 Jede Kategorie hat einen Typ:
 

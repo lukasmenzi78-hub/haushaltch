@@ -1,7 +1,7 @@
-// budget.js — Flex-Budget-Ansicht
+// budget.js — Budget-Ansicht (nullbasiert oder Flex-Topf)
 import { store } from '../core/store.js';
 import { h, fmtMoney, fmtPercent, monthLabel, currentMonthKey, addMonths, round2, debounce } from '../core/util.js';
-import { monthOverview, setBudget, copyBudgets, suggestBudgets, applySuggestions, categoryHistory, budgetAmount } from '../core/budget.js';
+import { monthOverview, setBudget, copyBudgets, suggestBudgets, applySuggestions, categoryHistory, budgetAmount, balanceInto } from '../core/budget.js';
 import { activeMonth } from '../core/analytics.js';
 import { BUDGET_TYPES } from '../core/model.js';
 import { chart, meter } from './charts.js';
@@ -59,9 +59,114 @@ export function renderBudget({ params, navigate }) {
         },
       }, 'Aus Ø 3 Monate'))));
 
-  root.append(flexCard(o, cur));
+  root.append(o.method === 'zero' ? zeroCard(o, cur, rerender) : flexCard(o, cur));
   root.append(groupsCard(o, cur, navigate));
   return root;
+}
+
+/* ---------------- Nullbasiert ---------------- */
+
+const SPEND_TYPES = ['fix', 'unregelmaessig', 'flex', 'sparen'];
+const balanceUi = { categoryId: null };
+
+function zeroCard(o, cur, rerender) {
+  const z = o.zeroBased;
+  const money = (v) => fmtMoney(v, cur, { noDecimals: true });
+  const card = h('section', { class: 'card' });
+  card.append(h('div', { class: 'card-head' },
+    h('h3', { class: 'grow' }, `Nullbasiertes Budget · ${monthLabel(o.period)}`),
+    h('button', { class: 'btn ghost sm', onClick: () => explainZero() }, 'Wie funktioniert das?')));
+
+  const state = z.balanced ? 'pos' : z.toAssign < 0 ? 'neg' : '';
+  card.append(h('div', { class: 'stat-row', style: { marginBottom: '14px' } },
+    statTile({
+      label: 'Einkommen geplant', value: money(z.income),
+      sub: `tatsächlich bisher ${money(o.income.actual)}`,
+    }),
+    statTile({
+      label: 'Verteilt', value: money(z.assigned),
+      sub: z.income > 0 ? `${fmtPercent(z.assigned / z.income, 0)} des Einkommens` : 'kein Einkommen geplant',
+    }),
+    statTile({
+      label: 'Noch zu verteilen', value: money(z.toAssign), hero: true, tone: state,
+      sub: z.balanced ? 'Jeder Franken hat eine Aufgabe' : z.toAssign > 0 ? 'Ziel: 0' : 'Mehr verteilt als geplant eingeht',
+    }),
+    statTile({
+      label: 'Ausgegeben', value: money(z.spent),
+      sub: `von ${money(z.assigned)} verteilt`,
+    })));
+
+  card.append(meter({
+    label: 'Verteilt vom geplanten Einkommen', value: z.assigned, max: z.income,
+    status: z.balanced ? 'good' : z.toAssign < 0 ? 'critical' : 'warning',
+    sublabel: `Fixkosten ${money(z.byType.fix)} · Rückstellungen ${money(z.byType.unregelmaessig)} · Sparen ${money(z.byType.sparen)} · Flexibel ${money(z.byType.flex)}`,
+  }));
+  card.append(meter({
+    label: 'Flexible Kategorien', value: o.flex.spent, max: o.flex.pool,
+    status: o.flex.pool && o.flex.spent > o.flex.pool ? 'critical' : o.flex.onTrack ? 'good' : 'warning',
+    sublabel: o.flex.pool
+      ? (o.flex.daysLeft > 0
+        ? `${money(o.flex.remaining)} übrig · noch ${o.flex.daysLeft} Tage · ${money(o.flex.perDay)} pro Tag`
+        : `${money(o.flex.remaining)} übrig · Monat abgeschlossen`)
+      : 'Noch keine flexiblen Kategorien budgetiert',
+  }));
+
+  if (z.income <= 0) {
+    card.append(h('p', { class: 'small', style: { marginTop: '10px' } },
+      'Trage zuerst das geplante Einkommen ein (Gruppe Einkommen, z. B. Lohn). Erst dann lässt sich jeder Franken verteilen.'));
+    return card;
+  }
+  if (z.balanced) {
+    card.append(h('p', { class: 'small pos', style: { marginTop: '10px' } },
+      '✓ Ausgeglichen: Das geplante Einkommen ist vollständig auf Kategorien verteilt.'));
+    return card;
+  }
+
+  // Ausgleichen über eine Kategorie: Rest zuschlagen oder Überhang abziehen
+  const options = store.idx.categories
+    .filter((c) => SPEND_TYPES.includes(c.budgetType) && !c.archived && !c.deleted)
+    .filter((c) => z.toAssign > 0 || budgetAmount(o.period, c.id) > 0);
+  if (!options.some((c) => c.id === balanceUi.categoryId)) {
+    balanceUi.categoryId = (options.find((c) => c.id === 'c_sparen') || options[0])?.id || null;
+  }
+  const sel = h('select', { style: { width: 'auto', minWidth: '220px', maxWidth: '100%' }, onChange: (e) => { balanceUi.categoryId = e.target.value; } },
+    options.map((c) => h('option', { value: c.id, selected: c.id === balanceUi.categoryId },
+      `${c.icon || ''} ${c.name}${z.toAssign < 0 ? ` (${money(budgetAmount(o.period, c.id))})` : ''}`.trim())));
+  card.append(h('div', { class: 'row', style: { marginTop: '12px', alignItems: 'center', flexWrap: 'wrap', gap: '8px' } },
+    h('span', { class: `small ${z.toAssign < 0 ? 'neg' : ''}` }, z.toAssign > 0
+      ? `${money(z.toAssign)} haben noch keine Aufgabe. Zuweisen an`
+      : `${money(-z.toAssign)} zu viel verteilt. Abziehen von`),
+    sel,
+    h('button', {
+      class: 'btn primary sm', disabled: !balanceUi.categoryId,
+      onClick: () => {
+        const cat = store.category(balanceUi.categoryId);
+        const rest = balanceInto(o.period, balanceUi.categoryId, z.toAssign);
+        toast(rest === 0
+          ? `Ausgeglichen über ${cat?.name}`
+          : `${cat?.name} reicht nicht ganz – noch ${money(-rest)} zu viel verteilt`, rest === 0 ? 'success' : 'info');
+        rerender();
+      },
+    }, 'Ausgleichen')));
+  card.append(h('p', { class: 'small muted', style: { marginTop: '6px' } },
+    'Oder die Beträge unten in den Kategorien direkt anpassen.'));
+  return card;
+}
+
+function explainZero() {
+  modal({
+    title: 'So rechnet das nullbasierte Budget',
+    body: h('div', { class: 'small' },
+      h('p', {}, h('b', {}, 'Noch zu verteilen = geplantes Einkommen − alle Kategorienbudgets.'),
+        ' Ziel ist genau 0: Jeder Franken, der im Monat eingehen soll, bekommt vorab eine Aufgabe – Ausgabe, Rückstellung oder Sparen.'),
+      h('p', {}, 'Gezählt werden alle Kategorien mit den Typen Fixkosten, Unregelmässig, Flexibel sowie Sparen & Vorsorge. Einkommen und Überträge zählen nicht.'),
+      h('ul', {},
+        BUDGET_TYPES.filter((b) => SPEND_TYPES.includes(b.id)).map((b) => h('li', {}, h('b', {}, b.label + ': '), b.hint))),
+      h('p', {}, 'Bleibt etwas übrig, weise es zu – am einfachsten mit „Ausgleichen“, z. B. an „Sparen allgemein“. Ist mehr verteilt, als eingeht, ziehe es bei einer Kategorie ab oder plane mehr Einkommen.'),
+      h('p', {}, 'Restbudget übertragen (in der Kategorie einstellbar) erhöht das verfügbare Geld der Kategorie im Folgemonat, nicht das zu verteilende Einkommen.'),
+      h('p', {}, 'Umstellen auf den Flex-Topf: Einstellungen → Allgemein → Budgetmethode.')),
+    actions: [{ label: 'Verstanden', variant: 'primary' }],
+  });
 }
 
 function flexCard(o, cur) {

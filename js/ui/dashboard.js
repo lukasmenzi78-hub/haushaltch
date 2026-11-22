@@ -117,11 +117,17 @@ function hero(cur, month = currentMonthKey()) {
       }),
       statTile({ label: `Einnahmen ${monthLabel(month, true)}`, value: fmtMoney(cf?.einnahmen || 0, cur, { noDecimals: true }) }),
       statTile({ label: `Ausgaben ${monthLabel(month, true)}`, value: fmtMoney(cf?.ausgaben || 0, cur, { noDecimals: true }) }),
-      statTile({
-        label: 'Flexibel frei', value: fmtMoney(flex.flex.remaining, cur, { noDecimals: true }),
-        tone: flex.flex.remaining < 0 ? 'neg' : '',
-        sub: flex.flex.daysLeft > 0 ? `${fmtMoney(flex.flex.perDay, cur, { noDecimals: true })} pro Tag bis Monatsende` : 'Monat abgeschlossen',
-      }),
+      flex.method === 'zero' && !flex.zeroBased.balanced && flex.zeroBased.income > 0
+        ? statTile({
+          label: 'Noch zu verteilen', value: fmtMoney(flex.zeroBased.toAssign, cur, { noDecimals: true }),
+          tone: flex.zeroBased.toAssign < 0 ? 'neg' : '',
+          sub: flex.zeroBased.toAssign < 0 ? 'mehr verteilt als geplant eingeht' : 'Budget noch nicht ausgeglichen',
+        })
+        : statTile({
+          label: 'Flexibel frei', value: fmtMoney(flex.flex.remaining, cur, { noDecimals: true }),
+          tone: flex.flex.remaining < 0 ? 'neg' : '',
+          sub: flex.flex.daysLeft > 0 ? `${fmtMoney(flex.flex.perDay, cur, { noDecimals: true })} pro Tag bis Monatsende` : 'Monat abgeschlossen',
+        }),
       statTile({ label: 'Sparquote', value: fmtPercent(cf?.sparquote || 0, 0) }),
     ));
 }
@@ -158,12 +164,18 @@ function renderWidget(w, navigate) {
           status: o.flex.pool && o.flex.spent > o.flex.pool ? 'critical' : o.flex.onTrack ? 'good' : 'warning',
           sublabel: o.flex.pool
             ? `${fmtMoney(o.flex.remaining, cur, { noDecimals: true })} übrig · erwartet bis heute ${fmtMoney(o.flex.expectedByNow, cur, { noDecimals: true })}`
-            : 'Noch kein Einkommen budgetiert',
+            : (o.method === 'zero' ? 'Noch keine flexiblen Kategorien budgetiert' : 'Noch kein Einkommen budgetiert'),
         }));
+        if (o.method === 'zero' && o.zeroBased.income > 0 && !o.zeroBased.balanced) {
+          box.append(h('p', { class: `small ${o.zeroBased.toAssign < 0 ? 'neg' : ''}`, style: { margin: '0 0 10px' } },
+            o.zeroBased.toAssign > 0
+              ? `Noch ${fmtMoney(o.zeroBased.toAssign, cur, { noDecimals: true })} zu verteilen`
+              : `${fmtMoney(-o.zeroBased.toAssign, cur, { noDecimals: true })} mehr verteilt als geplant eingeht`));
+        }
         box.append(meter({ label: 'Fixkosten', value: o.fixed.actual, max: o.fixed.planned || o.fixed.actual, color: 'var(--series-7)' }));
         box.append(meter({ label: 'Rückstellungen', value: o.reserves.actual, max: o.reserves.planned || o.reserves.actual, color: 'var(--series-4)' }));
         box.append(meter({ label: 'Sparen & Vorsorge', value: o.savings.actual, max: o.savings.planned || o.savings.actual, color: 'var(--series-3)' }));
-        return widgetCard(w.title || 'Flex-Budget', box,
+        return widgetCard(w.title || (o.method === 'zero' ? 'Budget' : 'Flex-Budget'), box,
           { action: h('button', { class: 'btn ghost sm', onClick: () => navigate('budget') }, 'Budget') });
       }
       case 'cashflow': {

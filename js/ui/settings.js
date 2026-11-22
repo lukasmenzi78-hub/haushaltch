@@ -2,6 +2,7 @@
 import { store } from '../core/store.js';
 import { h, fmtMoney, fmtDate, fmtNumber, uid, now, todayISO, sortBy, CURRENCIES, escapeHtml } from '../core/util.js';
 import { newCategory, newRule, BUDGET_TYPES, newDoc } from '../core/model.js';
+import { BUDGET_METHODS, budgetMethod } from '../core/budget.js';
 import { RULE_FIELDS, RULE_OPS, applyRulesTo } from '../core/rules.js';
 import { fetchRates, setRate, rateToBase, currenciesInUse, unknownCurrencies, seededOnlyCurrencies, SEED_RATES } from '../core/fx.js';
 import * as sync from '../core/sync.js';
@@ -72,6 +73,10 @@ function generalTab(rerender) {
         h('option', { value: 'auto', selected: s.theme === 'auto' }, 'Automatisch (Systemeinstellung)'),
         h('option', { value: 'light', selected: s.theme === 'light' }, 'Hell'),
         h('option', { value: 'dark', selected: s.theme === 'dark' }, 'Dunkel'))),
+    h('label', { class: 'field' }, h('span', {}, 'Budgetmethode'),
+      h('select', { onChange: (e) => { store.setSettings({ budgetMethod: e.target.value }); rerender(); } },
+        BUDGET_METHODS.map((m) => h('option', { value: m.id, selected: m.id === budgetMethod() }, m.label))),
+      h('span', { class: 'small muted' }, BUDGET_METHODS.find((m) => m.id === budgetMethod())?.hint)),
     h('label', { class: 'field' }, h('span', {}, 'Sicherheitspuffer auf dem Flex-Topf (%)'),
       h('input', {
         type: 'number', min: 0, max: 40, value: s.flexBufferPct || 0,

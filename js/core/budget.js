@@ -1,4 +1,5 @@
-// budget.js — Flex-Budget nach Monarch-Vorbild, angepasst an Schweizer Fixkosten
+// budget.js — Budget nach zwei Methoden: nullbasiert (jeder Franken bekommt eine Aufgabe)
+// oder Flex-Topf nach Monarch-Vorbild, angepasst an Schweizer Fixkosten
 import { store } from './store.js';
 import { amountBase, isTransferCategory, countableParts } from './analytics.js';
 import { round2, monthKey, addMonths, currentMonthKey, daysInMonth, startOfMonth, endOfMonth, sum, monthRange, todayISO } from './util.js';
@@ -8,6 +9,15 @@ export const FLEX_TYPES = ['flex'];
 export const FIXED_TYPES = ['fix'];
 export const RESERVE_TYPES = ['unregelmaessig'];
 export const SAVING_TYPES = ['sparen'];
+
+/** Budgetmethoden. Ohne Einstellung gilt Flex – so ändert sich für bestehende Daten nichts. */
+export const BUDGET_METHODS = [
+  { id: 'zero', label: 'Nullbasiert', hint: 'Jeder Franken des geplanten Einkommens bekommt eine Kategorie. Ziel: „Noch zu verteilen“ = 0.' },
+  { id: 'flex', label: 'Flex-Topf', hint: 'Fixkosten, Rückstellungen und Sparen werden geplant, der Rest ist ein gemeinsamer Topf für den Alltag.' },
+];
+export function budgetMethod() {
+  return store.settings?.budgetMethod === 'zero' ? 'zero' : 'flex';
+}
 
 export function budgetEntry(period, categoryId) {
   return store.idx.budgets.find((b) => b.period === period && b.categoryId === categoryId) || null;
@@ -25,6 +35,18 @@ export function setBudget(period, categoryId, amount, note = '') {
   const entry = newBudgetEntry({ period, categoryId, amount: round2(Number(amount) || 0), note });
   store.upsert('budgets', entry, 'Budget geändert');
   return entry;
+}
+
+/**
+ * Gleicht das nullbasierte Budget über eine Kategorie aus: Ein positiver Rest wird ihr
+ * zugeschlagen, ein Überhang abgezogen – aber nie unter 0. Gibt zurück, was danach
+ * noch zu verteilen bleibt (0, wenn die Kategorie den Überhang ganz aufnehmen konnte).
+ */
+export function balanceInto(period, categoryId, toAssign) {
+  const current = budgetAmount(period, categoryId);
+  const next = round2(Math.max(0, current + toAssign));
+  setBudget(period, categoryId, next);
+  return round2(toAssign - (next - current));
 }
 
 export function clearBudget(period, categoryId) {
@@ -133,9 +155,18 @@ export function monthOverview(period = currentMonthKey(), opts = {}) {
   const flexPlanned = totalOf(flexCats, 'budget');
   const flexActual = totalOf(flexCats, 'actual');
 
+  const method = opts.method || budgetMethod();
   const incomeBasis = incomePlanned > 0 ? incomePlanned : incomeActual;
+  // Nullbasiert: Rechnungsgrundlage ist das geplante Einkommen, und jede Kategorie
+  // zählt mit ihrem eigenen Budget – auch die flexiblen. Übertrag aus dem Vormonat
+  // erhöht das verfügbare Geld der Kategorie, nicht das zu verteilende Einkommen.
+  const flexCarry = round2(sum(flexCats, (c) => rolloverFor(period, c.id, cache, cached)));
+  const assigned = round2(fixedPlanned + reservePlanned + savingPlanned + flexPlanned);
+  const toAssign = round2(incomePlanned - assigned);
   const bufferPct = Number(store.settings.flexBufferPct || 0) / 100;
-  const flexPool = round2(Math.max(0, (incomeBasis - fixedPlanned - reservePlanned - savingPlanned) * (1 - bufferPct)));
+  const flexPool = method === 'zero'
+    ? round2(Math.max(0, flexPlanned + flexCarry))
+    : round2(Math.max(0, (incomeBasis - fixedPlanned - reservePlanned - savingPlanned) * (1 - bufferPct)));
   const flexRemaining = round2(flexPool - flexActual);
 
   const isCurrent = period === currentMonthKey();
@@ -145,8 +176,17 @@ export function monthOverview(period = currentMonthKey(), opts = {}) {
   const expectedByNow = round2(flexPool * (dayOfMonth / totalDays));
 
   return {
-    period, groups, actuals,
+    period, groups, actuals, method,
     income: { planned: incomePlanned, actual: incomeActual, basis: incomeBasis },
+    zeroBased: {
+      income: incomePlanned,
+      assigned,
+      byType: { fix: fixedPlanned, unregelmaessig: reservePlanned, sparen: savingPlanned, flex: flexPlanned },
+      toAssign,
+      // Auf ganze Rappen genau verteilt gilt als ausgeglichen
+      balanced: Math.abs(toAssign) < 0.005,
+      spent: round2(fixedActual + reserveActual + savingActual + flexActual),
+    },
     fixed: { planned: fixedPlanned, actual: fixedActual },
     reserves: { planned: reservePlanned, actual: reserveActual },
     savings: { planned: savingPlanned, actual: savingActual },
@@ -164,7 +204,7 @@ export function monthOverview(period = currentMonthKey(), opts = {}) {
     summary: {
       totalPlannedOut: round2(fixedPlanned + reservePlanned + savingPlanned + flexPool),
       totalActualOut: round2(fixedActual + reserveActual + savingActual + flexActual),
-      leftToBudget: round2(incomeBasis - fixedPlanned - reservePlanned - savingPlanned - flexPool),
+      leftToBudget: method === 'zero' ? toAssign : round2(incomeBasis - fixedPlanned - reservePlanned - savingPlanned - flexPool),
       netActual: round2(incomeActual - fixedActual - reserveActual - savingActual - flexActual),
     },
   };
