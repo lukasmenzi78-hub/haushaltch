@@ -24,9 +24,13 @@ const base = `http://localhost:${server.address().port}`;
 const WINDOW_MS = 400;          // „Minute“ des Nachbaus
 const LIMIT = 8;                // Titel pro Fenster (Gratis-Tarif: 8 Credits/Minute)
 const PAUSE_MS = 450;           // Pause der App zwischen Paketen im Test
-const api = { calls: [], rejected: 0, window: [] };
+// mode 'top': ganze Anfrage abweisen; mode 'partial': wie bei Lukas beobachtet – Titel
+// bis zum Limit kommen, die übrigen im selben Paket erhalten je einen 429-Eintrag
+const api = { calls: [], rejected: 0, window: [], mode: 'top' };
 const quoteFor = (sym) => {
   if (sym === 'NOPE') return { code: 404, status: 'error', message: `symbol ${sym} not found` };
+  // So lehnt der Anbieter z. B. einen nicht abgedeckten Titel ab – darf den Abruf nicht stoppen
+  if (sym === 'BADSYM') return { code: 400, status: 'error', message: '**symbol** or **figi** parameter is missing or invalid.' };
   return { symbol: sym, name: `${sym} Test`, close: String(100 + sym.length), change: '1.5', currency: sym === 'WRONGCUR' ? 'EUR' : 'USD' };
 };
 async function twelveData(route) {
@@ -36,6 +40,14 @@ async function twelveData(route) {
   api.window = api.window.filter((x) => nowT - x.t < WINDOW_MS);
   const used = api.window.reduce((a, x) => a + x.n, 0);
   api.calls.push({ symbols, exchange: url.searchParams.get('exchange') });
+  if (used + symbols.length > LIMIT && api.mode === 'partial' && symbols.length > 1) {
+    api.rejected++;
+    const room = Math.max(0, LIMIT - used);
+    api.window.push({ t: nowT, n: room });
+    const body = Object.fromEntries(symbols.map((sym, i) => [sym, i < room ? quoteFor(sym)
+      : { code: 429, status: 'error', message: 'You have run out of API credits for the current minute.' }]));
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  }
   if (used + symbols.length > LIMIT) {
     api.rejected++;
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ code: 429, status: 'error', message: `You have run out of API credits for the current minute. ${used + symbols.length} API credits were used, with the current limit being ${LIMIT}.` }) });
@@ -74,7 +86,9 @@ await page.evaluate(async ({ US }) => {
     hold('UHRN', 'EBS', 'CHF'),
     hold('WRONGCUR', 'NYSE', 'USD'),
     hold('NOPE', 'NASDAQ', 'USD'),
-  ], 'Test');
+    // steht absichtlich vor den übrigen Titeln: ein Abbruch hier würde alle folgenden verhindern
+  ].concat([]).sort((a, b) => (a.symbol === 'BADSYM' ? -1 : 0)), 'Test');
+  store.upsert('holdings', hold('BADSYM', 'NYSE', 'USD'), 'Test');
   localStorage.setItem('swissfin.quoteKey', 'test-key-nur-fuer-den-nachbau');
   localStorage.setItem('swissfin.quoteProvider', 'twelvedata');
 }, { US });
@@ -102,6 +116,7 @@ check(!api.calls.some((c) => c.symbols.includes('UHRN')), 'SIX-Titel wird im Gra
 check(s.by.UHRN.p === 50 && s.by.UHRN.src === 'IBKR-Auszug', 'SIX-Titel behält den Kurs aus dem IBKR-Auszug');
 check(s.by.WRONGCUR.p === 50, 'Kurs in fremder Währung wird nicht übernommen');
 check(s.by.NOPE.p === 50, 'Titel ohne Kurs bleibt unverändert');
+check(s.by.BADSYM.p === 50 && usUpdated === US.length, 'ein vom Anbieter abgelehnter Titel („… invalid“) stoppt den Abruf nicht');
 check(s.snapshotToday, 'Tagesstand für den Depotverlauf geschrieben');
 const toastText = await page.locator('#toasts').innerText().catch(() => '');
 check(/ausserhalb der USA/i.test(toastText) && /ohne Ergebnis/i.test(toastText), 'Meldung nennt übersprungene und fehlgeschlagene Titel');
@@ -110,10 +125,10 @@ console.log('\n2. Limit trotzdem erreicht: die App wartet und versucht es nochma
 api.calls.length = 0; api.rejected = 0; api.window = [];
 const r2 = await page.evaluate(async (win) => {
   const q = await import('./js/core/quotes.js');
-  q.PROVIDERS.twelvedata.pauseMs = 60;          // Pakete zu schnell hintereinander …
+  q.PROVIDERS.twelvedata.pauseMs = 20;          // Abfragen zu schnell hintereinander …
   q.PROVIDERS.twelvedata.retryMs = win + 50;    // … aber nach einer Abweisung lange genug warten
   const res = await q.refreshQuotes({ force: true });
-  return { updated: res.updated, failed: res.failed.filter((f) => !f.notCovered && !['WRONGCUR', 'NOPE'].includes(f.symbol)).map((f) => f.symbol) };
+  return { updated: res.updated, failed: res.failed.filter((f) => !f.notCovered && !['WRONGCUR', 'NOPE', 'BADSYM'].includes(f.symbol)).map((f) => f.symbol) };
 }, WINDOW_MS);
 check(api.rejected > 0, `der Nachbau hat abgewiesen (${api.rejected}×)`);
 check(r2.updated === US.length && r2.failed.length === 0, `trotzdem alle US-Titel aktualisiert (${r2.updated})`);
@@ -129,11 +144,63 @@ await page.evaluate(async (US) => {
 api.calls.length = 0;
 await page.reload();
 await page.waitForSelector('.card');
-await page.waitForTimeout(11000);
+// Start nach 8 s, danach ein Titel alle 7,6 s (echter Takt des Gratis-Tarifs)
+await page.waitForTimeout(8000 + 3 * 7600 + 2000);
+for (let i = 0; i < 50 && await page.evaluate(async () => (await import('./js/core/quotes.js')).isRefreshing()); i++) await page.waitForTimeout(500);
 s = await state();
 const requested = api.calls.flatMap((c) => c.symbols);
 check(US.slice(0, 3).every((x) => s.by[x].fresh && s.by[x].p !== 50), 'die drei veralteten Kurse wurden beim Start erneuert');
 check(requested.length === 3 && !requested.includes(US[5]), `aktuelle Kurse wurden nicht nochmals abgefragt (${requested.length} Titel angefragt)`);
+
+console.log('\n4. Einzelne Titel im Paket abgewiesen (Teil-Antwort)');
+api.calls.length = 0; api.rejected = 0; api.window = []; api.mode = 'partial';
+// Ein Credit ist in dieser „Minute“ schon verbraucht – wie durch „Verbindung testen“
+api.window.push({ t: Date.now(), n: 1 });
+const r4 = await page.evaluate(async (win) => {
+  const q = await import('./js/core/quotes.js');
+  q.PROVIDERS.twelvedata.batchSize = 8;        // Pakete, damit Teil-Antworten vorkommen
+  q.PROVIDERS.twelvedata.pauseMs = win + 50;
+  q.PROVIDERS.twelvedata.retryMs = win + 50;
+  const res = await q.refreshQuotes({ force: true });
+  q.PROVIDERS.twelvedata.batchSize = 1;
+  return { updated: res.updated, failed: res.failed.filter((f) => !f.notCovered && !['WRONGCUR', 'NOPE', 'BADSYM'].includes(f.symbol)).map((f) => f.symbol) };
+}, WINDOW_MS);
+check(api.rejected > 0, `der Nachbau hat einzelne Titel abgewiesen (${api.rejected}×)`);
+check(r4.updated === US.length && r4.failed.length === 0, `abgewiesene Titel wurden nachgeholt: ${r4.updated} aktualisiert, ${r4.failed.length} fehlen`);
+api.mode = 'top';
+
+console.log('\n5. App in zwei Fenstern offen');
+api.calls.length = 0; api.rejected = 0; api.window = [];
+const page2 = await ctx.newPage();
+await page2.goto(`${base}/index.html#anlagen`);
+await page2.waitForSelector('.card');
+const startRun = (pg) => pg.evaluate(async (pause) => {
+  const q = await import('./js/core/quotes.js');
+  q.PROVIDERS.twelvedata.pauseMs = pause; q.PROVIDERS.twelvedata.retryMs = pause;
+  const res = await q.refreshQuotes({ force: true });
+  return { updated: res.updated, skipped: !!res.skipped, reason: res.reason || '' };
+}, PAUSE_MS);
+const [a, b] = await Promise.all([startRun(page), startRun(page2)]);
+check([a, b].filter((x) => x.skipped).length === 1, `nur ein Fenster ruft ab, das andere meldet: „${(a.skipped ? a : b).reason}“`);
+check(api.rejected === 0, `keine Abweisung durch gleichzeitige Abrufe (${api.rejected})`);
+await page2.close();
+
+console.log('\n6. Anzeige des Abrufs');
+await page.evaluate(() => { location.hash = '#budget'; });
+await page.waitForTimeout(200);
+await page.evaluate(() => { location.hash = '#anlagen'; });
+await page.waitForTimeout(400);
+let txt = await page.locator('main').innerText();
+check(/Letzter Kursabruf/i.test(txt), 'Anlagen zeigen den letzten Kursabruf mit Ergebnis');
+const running = page.evaluate(async (pause) => {
+  const q = await import('./js/core/quotes.js');
+  q.PROVIDERS.twelvedata.pauseMs = 1500;
+  return q.refreshQuotes({ force: true });
+}, PAUSE_MS);
+await page.waitForTimeout(700);
+txt = await page.locator('main').innerText();
+check(/Kurse werden geholt: \d+ von \d+/i.test(txt) && /offen lassen/i.test(txt), 'während des Abrufs: Fortschritt und Hinweis „App bitte offen lassen“');
+await running;
 
 check(errors.length === 0, `keine Fehler in der Konsole${errors.length ? ': ' + errors.slice(0, 2).join(' / ') : ''}`);
 await browser.close(); server.close();

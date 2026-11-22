@@ -151,9 +151,19 @@ async function boot() {
     const stale = store.idx.holdings.some((h) => h.symbol && !h.archived && quotes.isUsListing(h)
       && (!h.lastPriceAt || Date.now() - h.lastPriceAt > quotes.STALE_MS));
     if (!stale) return;
-    quotes.refreshQuotes({ force: false })
-      .then((res) => { if (res.updated) reportRefresh(res, { quiet: true }); })
-      .catch((e) => console.warn('Kursabruf:', e.message));
+    // Dauert der Abruf mehrere Minuten, sichtbar machen – sonst schliesst man die App
+    // womöglich mitten drin (er setzt dann beim nächsten Start fort).
+    let note = null;
+    quotes.refreshQuotes({
+      force: false,
+      onProgress: ({ done, total }) => {
+        if (total <= 8 || location.hash.startsWith('#anlagen')) { note?.remove(); note = null; return; }
+        if (!note) note = toast('', 'info', { timeout: 0 });
+        note.querySelector('span').textContent = `Kurse werden im Hintergrund geholt: ${done} von ${total} – App bitte offen lassen`;
+      },
+    })
+      .then((res) => { note?.remove(); if (res.updated) reportRefresh(res, { quiet: true }); })
+      .catch((e) => { note?.remove(); toast(`Kursabruf abgebrochen: ${e.message}`, 'error', { timeout: 9000 }); });
   }, 8000);
 
   // Kurse höchstens einmal pro Tag aktualisieren

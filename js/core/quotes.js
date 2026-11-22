@@ -9,6 +9,7 @@ const LS_PROVIDER = 'swissfin.quoteProvider';
 const LS_KEY = 'swissfin.quoteKey';
 
 function rateLimited(message) { const e = new Error(message); e.rateLimited = true; return e; }
+const isKeyError = (msg) => /api ?key|apikey|\b401\b|unauthori[sz]ed|token/i.test(String(msg || ''));
 
 /**
  * Börsenkürzel aus dem IBKR-Auszug, die zu den US-Börsen gehören. Nur diese decken die
@@ -30,9 +31,12 @@ export const PROVIDERS = {
     label: 'Twelve Data',
     signup: 'https://twelvedata.com/pricing',
     hint: 'Gratis-Tarif: 8 Titel pro Minute, 800 pro Tag, nur US-Börsen. SIX und andere Börsen erst ab einem bezahlten Tarif.',
-    batchSize: 8,
-    // Gratis-Tarif: 8 Credits pro Minute, 1 Credit je Titel → ein Paket à 8 pro Minute
-    pauseMs: 61000,
+    // Gratis-Tarif: 8 Credits pro Minute, 1 Credit je Titel. Einzeln abfragen, alle 7,6 s:
+    // gleicher Durchsatz wie Pakete à 8 pro Minute, aber ein Titel, den der Anbieter
+    // ablehnt, reisst nicht das ganze Paket mit.
+    batchSize: 1,
+    pauseMs: 7600,
+    retryMs: 61000,
     freeUsOnly: true,
     async fetchQuotes(symbols, key, { exchange = null } = {}) {
       const url = `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbols.join(','))}`
@@ -47,8 +51,17 @@ export const PROVIDERS = {
       }
       const list = symbols.length === 1 ? { [symbols[0]]: data } : data;
       const out = {};
+      // In einem Paket kann Twelve Data einzelne Titel abweisen (Minutenlimit, Tarif) –
+      // die übrigen kommen trotzdem. Abgewiesene merken, statt sie still zu verlieren.
+      const limited = [];
+      const errors = {};
       for (const [sym, q] of Object.entries(list)) {
-        if (!q || q.status === 'error') continue;
+        if (q && q.status === 'error') {
+          if (q.code === 429 || /credits|limit/i.test(q.message || '')) limited.push(sym.toUpperCase());
+          else errors[sym.toUpperCase()] = q.message || 'Fehler beim Anbieter';
+          continue;
+        }
+        if (!q) continue;
         const price = Number(q.close ?? q.price);
         if (!isFinite(price) || price <= 0) continue;
         out[sym.toUpperCase()] = {
@@ -58,6 +71,8 @@ export const PROVIDERS = {
           name: q.name || null,
         };
       }
+      Object.defineProperty(out, 'limited', { value: limited });
+      Object.defineProperty(out, 'errors', { value: errors });
       return out;
     },
   },
@@ -110,11 +125,52 @@ export function isRefreshing() { return !!running; }
  */
 export async function refreshQuotes({ force = false, onProgress = null } = {}) {
   if (running) return running;
-  running = run({ force, onProgress }).finally(() => { running = null; });
+  const go = () => run({ force, onProgress });
+  // Ist die App in mehreren Fenstern offen, teilen sich alle denselben Schlüssel und
+  // damit dasselbe Minutenlimit. Nur ein Fenster darf gleichzeitig abrufen.
+  const locked = typeof navigator !== 'undefined' && navigator.locks?.request
+    ? () => navigator.locks.request('haushaltch-kursabruf', { ifAvailable: true }, (lock) => (lock ? go()
+      : { updated: 0, failed: [], skipped: true, reason: 'Der Kursabruf läuft bereits in einem anderen Fenster der App.' }))
+    : go;
+  running = locked().finally(() => { running = null; });
   return running;
 }
 
+/* Fortschritt und letzter Stand – für die Anzeige, auch wenn der Abruf im Hintergrund läuft */
+const LS_STATUS = 'swissfin.quoteStatus';
+let current = null;
+export function quoteStatus() {
+  let st = current ? { ...current } : null;
+  if (!st) { try { st = JSON.parse(localStorage.getItem(LS_STATUS) || 'null'); } catch { st = null; } }
+  // Ein abgebrochener Abruf (Fenster geschlossen) hinterlässt „läuft“ – nach drei Minuten
+  // ohne Lebenszeichen gilt er als beendet (zwischen zwei Paketen liegt gut eine Minute).
+  if (st?.running && !running && Date.now() - (st.at || 0) > 3 * 60000) st.running = false;
+  return st;
+}
+export const QUOTE_STATUS_KEY = LS_STATUS;
+function publish(patch) {
+  current = { ...(current || {}), ...patch, at: Date.now() };
+  try { localStorage.setItem(LS_STATUS, JSON.stringify(current)); } catch (e) { /* egal */ }
+  try { window.dispatchEvent(new CustomEvent('kurse', { detail: { ...current } })); } catch (e) { /* egal */ }
+}
+
 async function run({ force, onProgress }) {
+  const progress = (p) => { publish({ running: true, ...p }); onProgress?.(p); };
+  const status = (p) => publish(p);
+  try {
+    const res = await fetchAll({ force, progress, status });
+    publish({ running: false, finishedAt: Date.now(), updated: res.updated, failed: res.failed || [], skipped: !!res.skipped, reason: res.reason || null, notCovered: res.notCovered || 0, provider: res.provider || null });
+    current = null;
+    return res;
+  } catch (e) {
+    publish({ running: false, finishedAt: Date.now(), error: e.message });
+    current = null;
+    throw e;
+  }
+}
+
+async function fetchAll({ force, progress, status }) {
+  current = { startedAt: Date.now(), running: true, done: 0, total: 0, updated: 0, failed: [], error: null };
   const key = getKey();
   if (!key) throw new Error('Kein Kurs-Schlüssel hinterlegt. Einstellungen → Kurse.');
   const provider = PROVIDERS[getProvider()] || PROVIDERS.twelvedata;
@@ -141,6 +197,7 @@ async function run({ force, onProgress }) {
   const t = now();
   let updated = 0, done = 0;
   const total = plain.length + withExchange.length;
+  progress({ done: 0, total, waiting: false });
   const apply = (quotes) => {
     const updates = [];
     for (const h of wanted) {
@@ -164,31 +221,40 @@ async function run({ force, onProgress }) {
     updated += updates.length;
   };
 
+  const retryMs = provider.retryMs || provider.pauseMs || 61000;
   for (let j = 0; j < jobs.length; j++) {
     const job = jobs[j];
-    onProgress?.({ done, total, waiting: false });
-    let got = null;
-    for (let attempt = 0; attempt < 2 && got === null; attempt++) {
+    progress({ done, total, waiting: false });
+    let pending = job.symbols.slice();
+    const got = {};
+    for (let attempt = 0; pending.length && attempt < 3; attempt++) {
+      let res;
       try {
-        const res = await provider.fetchQuotes(job.symbols, key, { exchange: job.exchange || null });
-        got = job.as && res[job.symbols[0]] ? { [job.as]: res[job.symbols[0]] } : res;
+        res = await provider.fetchQuotes(pending, key, { exchange: job.exchange || null });
       } catch (e) {
-        if (e.rateLimited && attempt === 0) {
-          onProgress?.({ done, total, waiting: true });
-          await sleep(provider.retryMs || provider.pauseMs || 61000);
-          continue;
-        }
-        if (/401|403|invalid|api ?key/i.test(e.message)) throw e;   // Schlüsselproblem: sofort abbrechen
-        failed.push(...job.symbols.map((s) => ({ symbol: job.as || s, error: e.message })));
-        got = {};
+        if (e.rateLimited && attempt < 2) { progress({ done, total, waiting: true }); await sleep(retryMs); continue; }
+        // Nur ein Schlüsselproblem bricht ab. Eine Meldung wie „symbol … invalid“ betrifft
+        // einen einzelnen Titel und darf den Rest des Abrufs nicht stoppen.
+        if (isKeyError(e.message)) throw e;
+        failed.push(...pending.map((sym) => ({ symbol: job.as || sym, error: e.message })));
+        pending = [];
+        break;
       }
+      for (const [sym, q] of Object.entries(res)) got[job.as && sym === job.symbols[0] ? job.as : sym] = q;
+      for (const [sym, msg] of Object.entries(res.errors || {})) failed.push({ symbol: job.as || sym, error: msg });
+      pending = (res.limited || []).filter((sym) => pending.includes(sym));
+      if (pending.length && attempt < 2) { progress({ done, total, waiting: true }); await sleep(retryMs); }
     }
-    apply(got || {});
-    const missing = (job.as ? [job.as] : job.symbols).filter((s) => !(got || {})[s] && !failed.some((f) => f.symbol.toUpperCase() === s));
-    failed.push(...missing.map((s) => ({ symbol: s, error: 'kein Kurs geliefert' })));
+    for (const sym of pending) failed.push({ symbol: job.as || sym, error: 'Minutenlimit des Anbieters – kommt beim nächsten Abruf dran' });
+    apply(got);
+    const expected = job.as ? [job.as] : job.symbols;
+    for (const sym of expected) {
+      if (!got[sym] && !failed.some((f) => f.symbol.toUpperCase() === sym)) failed.push({ symbol: sym, error: 'kein Kurs geliefert' });
+    }
     done += job.symbols.length;
+    status({ done, updated, failed: failed.length });
     if (j < jobs.length - 1) {
-      onProgress?.({ done, total, waiting: true });
+      progress({ done, total, waiting: true });
       await sleep(provider.pauseMs || 900);
     }
   }

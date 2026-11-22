@@ -2,14 +2,14 @@
 import { store } from '../core/store.js';
 import {
   h, fmtMoney, fmtNumber, fmtPercent, fmtDate, monthLabel, sortBy, todayISO,
-  round2, sum, CURRENCIES, uid, now,
+  round2, sum, CURRENCIES, uid, now, clear,
 } from '../core/util.js';
 import { ASSET_CLASSES, REGIONS, newHolding, newDividend } from '../core/model.js';
 import {
   portfolio, allocation, evaluatePosition, valueHistory, performanceBreakdown,
   dividendsByYear, dividendYield, writeSnapshot,
 } from '../core/investments.js';
-import { refreshQuotes, setManualPrice, isConfigured, isRefreshing, getProvider, PROVIDERS } from '../core/quotes.js';
+import { refreshQuotes, setManualPrice, isConfigured, isRefreshing, getProvider, PROVIDERS, quoteStatus, QUOTE_STATUS_KEY } from '../core/quotes.js';
 import { chart, meter } from './charts.js';
 import {
   modal, toast, confirmDialog, emptyState, statTile, segmented, accountSelect, colorSwatches, warningCard,
@@ -97,6 +97,7 @@ export function renderInvestments({ params, navigate }) {
         : stale
           ? `${stale} Position${stale > 1 ? 'en' : ''} mit altem Kurs${src ? ` (ältester Stand ${src})` : ''}.`
           : `Alle Kurse aktuell${src ? ` (Stand ${src})` : ''} · Quelle ${PROVIDERS[getProvider()]?.label || '—'}`));
+    if (isConfigured()) card.append(quoteStatusLine(rerender));
     return card;
   }
 
@@ -288,6 +289,46 @@ export function renderInvestments({ params, navigate }) {
   }
 }
 
+/* ---------------- Stand des Kursabrufs ---------------- */
+
+/** Zeile mit dem laufenden oder letzten Kursabruf; aktualisiert sich selbst. */
+function quoteStatusLine(rerender) {
+  const line = h('div', { class: 'small', style: { marginTop: '6px' } });
+  let wasRunning = false;
+  const paint = () => {
+    const st = quoteStatus();
+    clear(line);
+    if (!st) return;
+    if (st.running) {
+      wasRunning = true;
+      const left = Math.max(1, Math.ceil(((st.total || 0) - (st.done || 0)) / 8));
+      line.append(h('span', {}, st.total
+        ? `⟳ Kurse werden geholt: ${st.done || 0} von ${st.total} – noch etwa ${left} Minute${left > 1 ? 'n' : ''} (Gratis-Tarif: 8 Titel pro Minute) · App bitte offen lassen`
+        : '⟳ Kurse werden geholt …'));
+      return;
+    }
+    if (wasRunning) { wasRunning = false; rerender?.(); return; }
+    const when = st.finishedAt ? new Date(st.finishedAt).toLocaleString('de-CH', { dateStyle: 'short', timeStyle: 'short' }) : '';
+    if (st.error) { line.append(h('span', { class: 'neg' }, `Letzter Kursabruf (${when}) abgebrochen: ${st.error}`)); return; }
+    if (st.skipped) return;
+    const real = (st.failed || []).filter((f) => !f.notCovered);
+    line.append(h('span', { class: 'muted' },
+      `Letzter Kursabruf ${when}: ${st.updated || 0} aktualisiert`
+      + (st.notCovered ? `, ${st.notCovered} ausserhalb der USA` : '')
+      + (real.length ? `, ${real.length} ohne Kurs` : '') + ' '),
+    (st.failed || []).length ? h('a', { href: '#', onClick: (e) => { e.preventDefault(); showFailures(st.failed); } }, 'Details') : null);
+  };
+  paint();
+  const onEvent = (e) => {
+    if (!line.isConnected) { window.removeEventListener('kurse', onEvent); window.removeEventListener('storage', onEvent); return; }
+    if (e.type === 'storage' && e.key !== QUOTE_STATUS_KEY) return;
+    paint();
+  };
+  window.addEventListener('kurse', onEvent);
+  window.addEventListener('storage', onEvent);
+  return line;
+}
+
 /* ---------------- Kurse holen ---------------- */
 
 async function doRefresh(rerender) {
@@ -306,16 +347,15 @@ async function doRefresh(rerender) {
     });
     return;
   }
-  if (isRefreshing()) { toast('Der Kursabruf läuft bereits.', 'info'); return; }
+  if (isRefreshing() || quoteStatus()?.running) { toast('Der Kursabruf läuft bereits – der Fortschritt steht oben bei den Anlagen.', 'info'); return; }
   const t = toast('Kurse werden geholt …', 'info', { timeout: 0 });
   const label = t.querySelector('span');
   try {
     const res = await refreshQuotes({
       force: true,
-      onProgress: ({ done, total, waiting }) => {
-        if (label) label.textContent = waiting
-          ? `Kurse ${done} von ${total} – Gratis-Tarif erlaubt nur wenige pro Minute, nächstes Paket in einer Minute …`
-          : `Kurse werden geholt … ${done} von ${total}`;
+      onProgress: ({ done, total }) => {
+        const left = Math.max(1, Math.ceil((total - done) / 8));
+        if (label) label.textContent = `Kurse werden geholt: ${done} von ${total} – noch etwa ${left} Minute${left > 1 ? 'n' : ''} (Gratis-Tarif: 8 Titel pro Minute)`;
       },
     });
     t.remove();

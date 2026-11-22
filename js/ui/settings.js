@@ -543,8 +543,8 @@ function quotesTab(rerender) {
   info.append(h('div', { class: 'card-head' }, h('h3', { class: 'grow' }, 'Was der Gratis-Tarif abdeckt')));
   info.append(h('p', { class: 'small muted' },
     'Die Gratis-Tarife decken nur US-Börsen ab (VT, SCHD, AMZN …). Twelve Data erlaubt dabei 8 Titel pro Minute: '
-    + 'Bei vielen Positionen dauert ein Abruf deshalb einige Minuten – die App wartet zwischen den Paketen selbst '
-    + 'und speichert jedes Paket sofort. Einmal pro Tag holt sie die Kurse beim Start im Hintergrund.'));
+    + 'Bei vielen Positionen dauert ein Abruf deshalb einige Minuten – die App fragt die Titel einzeln in diesem Takt ab '
+    + 'und speichert jeden Kurs sofort. Einmal pro Tag holt sie die Kurse beim Start im Hintergrund.'));
   info.append(h('p', { class: 'small muted' },
     'Titel von der SIX (im IBKR-Auszug Börse „EBS“) überspringt die App im Gratis-Tarif, statt sie womöglich einem '
     + 'gleichnamigen US-Papier zuzuordnen. Ihr Kurs kommt aus dem letzten IBKR-Auszug oder wird von Hand gesetzt. '

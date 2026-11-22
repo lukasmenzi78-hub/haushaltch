@@ -316,9 +316,15 @@ Ein Gratis-Schlüssel bei einem Kursanbieter genügt, einzurichten unter
    jederzeit von Hand.
 
 Der Gratis-Tarif von Twelve Data erlaubt **8 Titel pro Minute** (800 pro Tag). Bei
-vielen Positionen dauert ein Abruf deshalb ein paar Minuten: Die App fragt in Paketen
-à 8 ab, wartet dazwischen eine Minute und speichert jedes Paket sofort. Wird die App
-vorher geschlossen, setzt der nächste Abruf dort fort.
+vielen Positionen dauert ein Abruf deshalb ein paar Minuten: Die App fragt die Titel
+einzeln ab, acht pro Minute, und speichert jeden Kurs sofort. Lehnt der Anbieter einen
+Titel ab, läuft der Abruf mit den übrigen weiter. Unter
+**Anlagen** steht währenddessen „Kurse werden geholt: 16 von 37 – noch etwa 3 Minuten … App bitte
+offen lassen“, danach das Ergebnis des letzten Abrufs. Wird die App vorher geschlossen,
+setzt der nächste Abruf dort fort. Ist die App in mehreren Fenstern offen, ruft nur
+eines ab – sonst würden sich die Fenster das Minutenlimit gegenseitig wegnehmen.
+Weist der Anbieter einzelne Titel wegen des Limits ab, holt die App sie nach einer
+Minute nach.
 
 Der Schlüssel bleibt auf dem jeweiligen Gerät und wird **nicht** über OneDrive geteilt –
 Lea trägt auf ihrem Gerät einen eigenen ein (oder denselben).
